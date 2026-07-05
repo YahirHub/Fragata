@@ -7,7 +7,7 @@
   <title>Cámara · Fragata</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css">
-  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/styles.css?v=0.6.4">
 </head>
 <body>
   <fragata-app-layout page-title="Visor de cámara" page-icon="bi-camera-video" active="cameras">
@@ -24,14 +24,14 @@
     </section>
 
     <section class="card dashboard-card viewer-card mb-4">
-      <div id="viewerStage" class="viewer-stage" style="--viewer-aspect: 16 / 9">
+      <div id="viewerStage" class="viewer-stage viewer-aspect-wide">
         <video id="viewerVideo" autoplay muted playsinline></video>
         <div id="viewerOverlay" class="viewer-overlay" role="status" aria-live="polite">
-          <span id="viewerSpinner" class="spinner-border text-light mb-3" aria-hidden="true"></span>
-          <span id="viewerMessage">Preparando vista en vivo…</span>
-          <button id="viewerPlayButton" type="button" class="btn btn-light btn-sm mt-3 d-none">
-            <i class="bi bi-play-fill me-1"></i>Reproducir
-          </button>
+          <div class="viewer-loader" aria-hidden="true">
+            <span class="viewer-loader-ring"></span>
+            <span class="viewer-loader-icon"><i class="bi bi-camera-video-fill"></i></span>
+          </div>
+          <span id="viewerMessage" class="viewer-loading-label">Conectando</span>
         </div>
       </div>
       <div class="viewer-controls">
@@ -42,7 +42,6 @@
         <div class="d-flex flex-wrap gap-2">
           <a href="/cameras" class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-left me-2"></i>Volver</a>
           <a id="cameraSettingsButton" href="/cameras" class="btn btn-outline-secondary btn-sm"><i class="bi bi-sliders me-2"></i>Ajustes</a>
-          <button id="reconnectButton" type="button" class="btn btn-outline-primary btn-sm"><i class="bi bi-arrow-repeat me-2"></i>Reconectar</button>
           <button id="fullscreenButton" type="button" class="btn btn-primary btn-sm"><i class="bi bi-arrows-fullscreen me-2"></i>Pantalla completa</button>
         </div>
       </div>
@@ -82,8 +81,8 @@
     </section>
   </fragata-app-layout>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
-  <script src="/static/layouts.js" defer></script>
-  <script src="/static/duration-picker.js" defer></script>
-  <script src="/static/viewer.js" defer></script>
+  <script src="/static/layouts.js?v=0.6.4" defer></script>
+  <script src="/static/duration-picker.js?v=0.6.4" defer></script>
+  <script src="/static/viewer.js?v=0.6.4" defer></script>
 </body>
 </html>

@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.6.4 - 2026-07-05
+
+- Corrige la política CSP que bloqueaba estilos dinámicos requeridos por Bootstrap y el ajuste del visor.
+- Elimina el estilo inline usado para la relación de aspecto y lo sustituye por clases CSS seguras.
+- Permite las solicitudes de mapas de código de jsDelivr para evitar advertencias falsas en la consola de desarrollo.
+- Usa FFmpeg para normalizar cualquier stream principal cuando está disponible, incluyendo H.264 Baseline irregular.
+- Reconstruye el RTP H.264 generado por FFmpeg en access units completas antes de enviarlo por WebRTC.
+- Conserva el GOP transcodificado desde el último fotograma clave para que los visores no se incorporen a mitad del video.
+- Inyecta SPS/PPS al comienzo de cada sesión y mantiene el reintento automático detrás del estado `Conectando`.
+- Agrega respaldo automático al stream H.264 directo o secundario cuando FFmpeg falla.
+
+## 0.6.3 - 2026-07-05
+
+- Oculta completamente el elemento de video hasta confirmar un fotograma realmente decodificado.
+- Sustituye mensajes técnicos y recuperación manual por un único estado visual `Conectando`.
+- Añade una animación de carga profesional mientras WebRTC negocia, espera un fotograma clave o reintenta.
+- Mantiene los reintentos automáticos ante timeout, pista detenida, ICE fallido, video estancado y recuperación de red.
+- Exige datos de imagen y dimensiones reales antes de revelar el video en navegadores sin `requestVideoFrameCallback`.
+- Ajusta la relación de aspecto con las dimensiones decodificadas del stream.
+- Elimina el botón manual Reconectar del visor.
+- Desactiva la caché de HTML, JavaScript y CSS embebidos para impedir que el navegador reutilice interfaces antiguas.
+
+## 0.6.2 - 2026-07-05
+
+- Reintenta automáticamente la vista WebRTC cuando no llega un fotograma decodificable.
+- Mantiene el overlay en un único estado `Conectando` durante preparación, reconexión y recuperación.
+- Maneja fallos de conexión, ICE desconectado, pistas terminadas o silenciadas, video estancado y cambios de red.
+- Comprueba fotogramas realmente decodificados mediante `requestVideoFrameCallback` y avance temporal como respaldo.
+- Recrea la sesión con backoff acotado y reinicio inmediato cuando el navegador vuelve a primer plano o recupera red.
+- Conserva en memoria un GOP H.264 acotado desde el último fotograma clave para iniciar visores sin esperar al siguiente IDR.
+- Limpia el GOP almacenado al reconectar la cámara para no entregar video obsoleto de una sesión anterior.
+- Mantiene las suscripciones confiables del grabador sin reproducción del GOP almacenado.
+
 ## 0.6.1 - 2026-07-05
 
 - Corrige el visor WebRTC que podía conectarse sin mostrar imagen y quedar completamente negro.

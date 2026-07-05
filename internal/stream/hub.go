@@ -7,6 +7,11 @@ import (
 	"github.com/pion/rtp"
 )
 
+const (
+	maxCachedGOPUnits = 600
+	maxCachedGOPBytes = 24 << 20
+)
+
 type Info struct {
 	Codec  string
 	Width  int
@@ -39,6 +44,8 @@ type Hub struct {
 	generation uint64
 	viewers    int
 	closed     bool
+	cachedGOP  []AccessUnit
+	cachedSize int
 }
 
 func NewHub() *Hub {
@@ -73,6 +80,7 @@ func (h *Hub) BeginSource() uint64 {
 		return 0
 	}
 	h.generation++
+	h.clearCachedGOPLocked()
 	return h.generation
 }
 
@@ -101,16 +109,17 @@ func (h *Hub) PublishRTP(pkt *rtp.Packet) {
 }
 
 func (h *Hub) PublishAccessUnit(au AccessUnit) {
-	h.mu.RLock()
+	h.mu.Lock()
 	if h.closed {
-		h.mu.RUnlock()
+		h.mu.Unlock()
 		return
 	}
+	h.cacheAccessUnitLocked(au)
 	subscriptions := make([]*accessUnitSubscription, 0, len(h.auSubs))
 	for subscription := range h.auSubs {
 		subscriptions = append(subscriptions, subscription)
 	}
-	h.mu.RUnlock()
+	h.mu.Unlock()
 
 	for _, subscription := range subscriptions {
 		copyAU := cloneAccessUnit(au)
@@ -127,6 +136,51 @@ func (h *Hub) PublishAccessUnit(au AccessUnit) {
 		default:
 		}
 	}
+}
+
+func (h *Hub) cacheAccessUnitLocked(au AccessUnit) {
+	if au.Discontinuity {
+		h.clearCachedGOPLocked()
+		return
+	}
+	if len(au.NALUs) == 0 {
+		return
+	}
+	if au.KeyFrame {
+		h.clearCachedGOPLocked()
+		h.cachedGOP = append(h.cachedGOP, cloneAccessUnit(au))
+		h.cachedSize = accessUnitSize(au)
+		return
+	}
+	if len(h.cachedGOP) == 0 {
+		return
+	}
+	if h.cachedGOP[0].Generation != 0 && au.Generation != 0 && h.cachedGOP[0].Generation != au.Generation {
+		h.clearCachedGOPLocked()
+		return
+	}
+	nextSize := h.cachedSize + accessUnitSize(au)
+	if len(h.cachedGOP) >= maxCachedGOPUnits || nextSize > maxCachedGOPBytes {
+		// ponytail: discard an oversized GOP instead of keeping an unbounded
+		// buffer; live viewers will wait for the next keyframe.
+		h.clearCachedGOPLocked()
+		return
+	}
+	h.cachedGOP = append(h.cachedGOP, cloneAccessUnit(au))
+	h.cachedSize = nextSize
+}
+
+func (h *Hub) clearCachedGOPLocked() {
+	h.cachedGOP = nil
+	h.cachedSize = 0
+}
+
+func accessUnitSize(au AccessUnit) int {
+	total := 0
+	for _, nalu := range au.NALUs {
+		total += len(nalu)
+	}
+	return total
 }
 
 func cloneAccessUnit(au AccessUnit) AccessUnit {
@@ -180,18 +234,33 @@ func (h *Hub) subscribeAccessUnits(size int, reliable bool) (<-chan AccessUnit, 
 	if size < 1 {
 		size = 64
 	}
+
+	h.mu.Lock()
+	cached := []AccessUnit(nil)
+	if !reliable && len(h.cachedGOP) > 0 {
+		cached = make([]AccessUnit, len(h.cachedGOP))
+		for i := range h.cachedGOP {
+			cached[i] = cloneAccessUnit(h.cachedGOP[i])
+		}
+		if minimum := len(cached) + 32; size < minimum {
+			size = minimum
+		}
+	}
 	subscription := &accessUnitSubscription{
 		channel:  make(chan AccessUnit, size),
 		reliable: reliable,
 		done:     make(chan struct{}),
 	}
-	h.mu.Lock()
 	if h.closed {
 		close(subscription.done)
 	} else {
+		for _, au := range cached {
+			subscription.channel <- au
+		}
 		h.auSubs[subscription] = struct{}{}
 	}
 	h.mu.Unlock()
+
 	return subscription.channel, func() {
 		subscription.once.Do(func() {
 			close(subscription.done)
@@ -235,6 +304,7 @@ func (h *Hub) Close() {
 		return
 	}
 	h.closed = true
+	h.clearCachedGOPLocked()
 	for ch := range h.rtpSubs {
 		close(ch)
 	}

@@ -23,7 +23,7 @@ Incluido:
 - Fallback a un substream H.264 cuando FFmpeg no está disponible o no puede iniciar.
 - Grabación MKV continua con duración configurable por cámara, rotación sin huecos y cierre atómico desde `.mkv.partial`.
 - Recuperación conservadora de parciales después de un apagado inesperado.
-- Vista en vivo WebRTC, página dedicada por cámara y botón de pantalla completa.
+- Vista en vivo WebRTC con reconexión automática, arranque desde el GOP actual, página dedicada por cámara y botón de pantalla completa.
 - Grabación apagada al agregar una cámara, switch persistente y componente reutilizable para elegir entre 1 minuto y 24 horas por archivo.
 - Cola SFTP persistente, reintentos con backoff, `known_hosts`, archivo temporal remoto y checksum SHA-256.
 - Login opcional definido en `.env`.
@@ -439,14 +439,14 @@ cmd/fragata/          punto de entrada
 internal/auth/        sesiones persistentes, login y CSRF
 internal/camera/      detección y supervisión de cámaras
 internal/httpapi/     API y panel web embebido
-internal/live/        puente RTP a WebRTC
+internal/live/        access units H.264 normalizadas hacia WebRTC
 internal/matroska/    escritor MKV sin CGO
 internal/onvif/       WS-Discovery y SOAP ONVIF
 internal/recording/   segmentación y recuperación
 internal/rtsp/        conexión RTSP, sondeo de puertos y diccionario de rutas
 internal/store/       estado JSON atómico y secretos cifrados
 internal/stream/      distribución interna de RTP y access units
-internal/transcode/   integración opcional con FFmpeg para WebRTC
+internal/transcode/   FFmpeg opcional y reconstrucción RTP/H.264 para WebRTC
 internal/upload/      cola y transferencia SFTP
 contexto/             decisiones técnicas persistentes
 ```

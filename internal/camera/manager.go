@@ -470,17 +470,12 @@ func (w *worker) stop() {
 
 func (w *worker) ensureLive(ctx context.Context) (*stream.Hub, string, error) {
 	primaryH264 := strings.EqualFold(w.cam.Codec, "H264")
-	if primaryH264 {
+	if primaryH264 && w.cfg.FFmpegPath == "" {
 		if err := waitForH264(ctx, w.hub, func() string { return "" }); err != nil {
 			return nil, "", err
 		}
-		// Baseline H.264 can be delivered directly. Main/High profile streams
-		// vary between browsers; when FFmpeg is available, normalize them to a
-		// browser-safe baseline stream instead of returning a connected black view.
-		if w.cfg.FFmpegPath == "" || browserSafeH264(w.hub.Info().SPS) {
-			w.update(func(status *model.RuntimeStatus) { status.LiveMode = "direct" })
-			return w.hub, "direct", nil
-		}
+		w.update(func(status *model.RuntimeStatus) { status.LiveMode = "direct" })
+		return w.hub, "direct", nil
 	}
 
 	w.liveMu.Lock()
@@ -555,11 +550,26 @@ func (w *worker) runLive(ctx context.Context, initialMode string, hub *stream.Hu
 					Path: w.cfg.FFmpegPath, URL: raw, Width: w.cam.Width, Height: w.cam.Height, Hub: hub, NoPacketTimeout: 10 * time.Second,
 				}).Run(ctx)
 			}
+			if err != nil && strings.EqualFold(w.cam.Codec, "H264") {
+				w.logger.Warn("FFmpeg live view failed; using direct H264 stream", "camera_id", w.cam.ID, "error", model.RedactSecrets(err.Error()))
+				mode = "direct"
+				backoff = time.Second
+				continue
+			}
 			if err != nil && strings.EqualFold(w.cam.LiveCodec, "H264") && w.cam.LiveRTSPURL != "" {
 				w.logger.Warn("FFmpeg live view failed; using H264 substream", "camera_id", w.cam.ID, "error", model.RedactSecrets(err.Error()))
 				mode = "substream"
 				backoff = time.Second
 				continue
+			}
+		case "direct":
+			raw, credentialErr := fragrtsp.WithCredentials(w.cam.RTSPURL, w.cam.Username, w.cam.Password)
+			if credentialErr != nil {
+				err = credentialErr
+			} else {
+				err = (&fragrtsp.Source{
+					URL: raw, Width: w.cam.Width, Height: w.cam.Height, Hub: hub,
+				}).Run(ctx)
 			}
 		case "substream":
 			raw, credentialErr := fragrtsp.WithCredentials(w.cam.LiveRTSPURL, w.cam.Username, w.cam.Password)
@@ -678,13 +688,6 @@ func channelClosed(done <-chan struct{}) bool {
 	default:
 		return false
 	}
-}
-
-func browserSafeH264(sps []byte) bool {
-	// profile_idc 66 is Baseline/Constrained Baseline, the mandatory WebRTC
-	// H.264 profile. Unknown or higher profiles are normalized with FFmpeg when
-	// it is available.
-	return len(sps) >= 2 && sps[0]&0x1f == 7 && sps[1] == 66
 }
 
 func waitForH264(ctx context.Context, hub *stream.Hub, lastError func() string) error {

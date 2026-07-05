@@ -33,8 +33,8 @@ func New(stunServers []string, maxPeers int) *Manager {
 
 // Offer creates a browser WebRTC session. Native RTSP sources are rebuilt from
 // complete H.264 access units so the browser receives a clean stream beginning
-// on a keyframe with SPS/PPS. FFmpeg already produces browser-oriented RTP and
-// can therefore be forwarded without decoding it again.
+// on a keyframe with SPS/PPS. FFmpeg RTP is also rebuilt into access units, so
+// every viewer can start from the cached GOP instead of joining mid-frame.
 func (m *Manager) Offer(ctx context.Context, hub *stream.Hub, offerSDP, mode string) (string, error) {
 	if hub == nil {
 		return "", errors.New("cámara no disponible")
@@ -96,65 +96,30 @@ func (m *Manager) Offer(ctx context.Context, hub *stream.Hub, offerSDP, mode str
 		SDPFmtpLine: h264FMTP(info.SPS),
 	}
 
-	if mode == "ffmpeg" {
-		track, trackErr := webrtc.NewTrackLocalStaticRTP(capability, "video", "fragata")
-		if trackErr != nil {
-			cleanup()
-			return "", trackErr
-		}
-		sender, addErr := pc.AddTrack(track)
-		if addErr != nil {
-			cleanup()
-			return "", addErr
-		}
-		drainRTCP(sender)
-		go func() {
-			select {
-			case <-peerCtx.Done():
-				return
-			case <-connected:
-			}
-			packets, unsubscribe := hub.SubscribeRTP(512)
-			defer unsubscribe()
-			for {
-				select {
-				case <-peerCtx.Done():
-					return
-				case pkt, ok := <-packets:
-					if !ok {
-						return
-					}
-					if err := track.WriteRTP(pkt); err != nil {
-						return
-					}
-				}
-			}
-		}()
-	} else {
-		track, trackErr := webrtc.NewTrackLocalStaticSample(capability, "video", "fragata")
-		if trackErr != nil {
-			cleanup()
-			return "", trackErr
-		}
-		sender, addErr := pc.AddTrack(track)
-		if addErr != nil {
-			cleanup()
-			return "", addErr
-		}
-		drainRTCP(sender)
-		go func() {
-			select {
-			case <-peerCtx.Done():
-				return
-			case <-connected:
-			}
-			releaseViewer := hub.AcquireViewer()
-			units, unsubscribe := hub.SubscribeAccessUnits(256)
-			defer unsubscribe()
-			defer releaseViewer()
-			relayAccessUnits(peerCtx, hub, track, units)
-		}()
+	_ = mode // El modo se conserva para diagnóstico; todos los streams se normalizan a access units.
+	track, trackErr := webrtc.NewTrackLocalStaticSample(capability, "video", "fragata")
+	if trackErr != nil {
+		cleanup()
+		return "", trackErr
 	}
+	sender, addErr := pc.AddTrack(track)
+	if addErr != nil {
+		cleanup()
+		return "", addErr
+	}
+	drainRTCP(sender)
+	go func() {
+		select {
+		case <-peerCtx.Done():
+			return
+		case <-connected:
+		}
+		releaseViewer := hub.AcquireViewer()
+		units, unsubscribe := hub.SubscribeAccessUnits(256)
+		defer unsubscribe()
+		defer releaseViewer()
+		relayAccessUnits(peerCtx, hub, track, units)
+	}()
 
 	if err := pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: offerSDP}); err != nil {
 		cleanup()

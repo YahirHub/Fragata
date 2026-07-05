@@ -3,6 +3,7 @@ package transcode
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -17,8 +18,8 @@ import (
 )
 
 // FFmpegSource converts a camera video stream to browser-compatible H.264 and
-// publishes its RTP packets into a Fragata hub. Recording never passes through
-// FFmpeg; the original maximum-quality stream remains untouched.
+// rebuilds complete H.264 access units in a Fragata hub. Recording never passes
+// through FFmpeg; the original maximum-quality stream remains untouched.
 type FFmpegSource struct {
 	Path            string
 	URL             string
@@ -60,7 +61,7 @@ func (s FFmpegSource) Run(ctx context.Context) error {
 		"-i", s.URL,
 		"-map", "0:v:0", "-an",
 		"-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
-		"-pix_fmt", "yuv420p", "-profile:v", "baseline", "-x264-params", "repeat-headers=1",
+		"-pix_fmt", "yuv420p", "-profile:v", "baseline", "-x264-params", "repeat-headers=1:aud=1",
 		"-bf", "0", "-g", "50", "-keyint_min", "25", "-sc_threshold", "0",
 		"-f", "rtp", "-payload_type", "96", outputURL,
 	}
@@ -88,9 +89,11 @@ func (s FFmpegSource) Run(ctx context.Context) error {
 		}
 	}()
 
+	generation := s.Hub.BeginSource()
+	defer s.Hub.EndSource(generation)
+	assembler := newH264RTPAssembler(s.Hub, generation, s.Width, s.Height)
 	buffer := make([]byte, 64<<10)
 	lastPacket := time.Now()
-	started := false
 	for {
 		if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
 			return err
@@ -101,15 +104,12 @@ func (s FFmpegSource) Run(ctx context.Context) error {
 			if err := packet.Unmarshal(buffer[:n]); err != nil {
 				continue
 			}
-			if !started {
-				s.Hub.SetInfo(stream.Info{Codec: "H264", Width: s.Width, Height: s.Height})
-				started = true
-			}
 			lastPacket = time.Now()
 			if s.OnPacket != nil {
 				s.OnPacket(n)
 			}
 			s.Hub.PublishRTP(&packet)
+			assembler.Push(&packet)
 			continue
 		}
 
@@ -186,3 +186,128 @@ func (b *tailBuffer) Write(p []byte) (int, error) {
 }
 
 func (b *tailBuffer) String() string { return b.buffer.String() }
+
+type h264RTPAssembler struct {
+	hub           *stream.Hub
+	generation    uint64
+	width         int
+	height        int
+	haveTimestamp bool
+	timestamp     uint32
+	baseTimestamp uint32
+	haveBase      bool
+	haveSequence  bool
+	lastSequence  uint16
+	nalus         [][]byte
+	fragment      []byte
+	sps           []byte
+	pps           []byte
+}
+
+func newH264RTPAssembler(hub *stream.Hub, generation uint64, width, height int) *h264RTPAssembler {
+	return &h264RTPAssembler{hub: hub, generation: generation, width: width, height: height}
+}
+
+func (a *h264RTPAssembler) Push(packet *rtp.Packet) {
+	if packet == nil || len(packet.Payload) == 0 {
+		return
+	}
+	if a.haveSequence && packet.SequenceNumber != a.lastSequence+1 {
+		a.fragment = nil
+	}
+	a.haveSequence = true
+	a.lastSequence = packet.SequenceNumber
+
+	if a.haveTimestamp && packet.Timestamp != a.timestamp {
+		a.flush()
+	}
+	if !a.haveTimestamp {
+		a.haveTimestamp = true
+		a.timestamp = packet.Timestamp
+		if !a.haveBase {
+			a.baseTimestamp = packet.Timestamp
+			a.haveBase = true
+		}
+	}
+
+	payload := packet.Payload
+	switch payload[0] & 0x1f {
+	case 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23:
+		a.appendNALU(payload)
+	case 24: // STAP-A
+		for offset := 1; offset+2 <= len(payload); {
+			size := int(binary.BigEndian.Uint16(payload[offset : offset+2]))
+			offset += 2
+			if size <= 0 || offset+size > len(payload) {
+				break
+			}
+			a.appendNALU(payload[offset : offset+size])
+			offset += size
+		}
+	case 28: // FU-A
+		if len(payload) < 3 {
+			break
+		}
+		start := payload[1]&0x80 != 0
+		end := payload[1]&0x40 != 0
+		naluType := payload[1] & 0x1f
+		if start {
+			a.fragment = append(a.fragment[:0], (payload[0]&0xe0)|naluType)
+			a.fragment = append(a.fragment, payload[2:]...)
+		} else if len(a.fragment) > 0 {
+			a.fragment = append(a.fragment, payload[2:]...)
+		}
+		if end && len(a.fragment) > 0 {
+			a.appendNALU(a.fragment)
+			a.fragment = nil
+		}
+	}
+	if packet.Marker {
+		a.flush()
+	}
+}
+
+func (a *h264RTPAssembler) appendNALU(nalu []byte) {
+	if len(nalu) == 0 {
+		return
+	}
+	copyNALU := append([]byte(nil), nalu...)
+	switch copyNALU[0] & 0x1f {
+	case 7:
+		a.sps = append(a.sps[:0], copyNALU...)
+	case 8:
+		a.pps = append(a.pps[:0], copyNALU...)
+	}
+	a.nalus = append(a.nalus, copyNALU)
+}
+
+func (a *h264RTPAssembler) flush() {
+	if !a.haveTimestamp {
+		return
+	}
+	if len(a.nalus) == 0 {
+		a.nalus = nil
+		a.fragment = nil
+		a.haveTimestamp = false
+		return
+	}
+	keyFrame := false
+	for _, nalu := range a.nalus {
+		if len(nalu) > 0 && nalu[0]&0x1f == 5 {
+			keyFrame = true
+			break
+		}
+	}
+	a.hub.SetInfo(stream.Info{
+		Codec: "H264", Width: a.width, Height: a.height,
+		SPS: append([]byte(nil), a.sps...), PPS: append([]byte(nil), a.pps...),
+	})
+	delta := a.timestamp - a.baseTimestamp
+	pts := time.Duration(delta) * time.Second / 90000
+	a.hub.PublishAccessUnit(stream.AccessUnit{
+		PTS: pts, NALUs: a.nalus, KeyFrame: keyFrame, Generation: a.generation,
+	})
+	a.nalus = nil
+	a.fragment = nil
+	a.haveTimestamp = false
+}
