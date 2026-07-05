@@ -1,0 +1,25 @@
+[Unit]
+Description=Fragata camera server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fragata
+Group=fragata
+WorkingDirectory=/opt/fragata
+EnvironmentFile=/etc/fragata/fragata.env
+ExecStart=/opt/fragata/fragata -env /etc/fragata/fragata.env
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/fragata
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

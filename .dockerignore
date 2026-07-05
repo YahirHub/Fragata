@@ -1,0 +1,11 @@
+.git
+.gitignore
+.env
+data
+recordings
+dist
+build
+coverage
+*.log
+*.tmp
+*.partial

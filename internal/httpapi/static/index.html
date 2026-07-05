@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Fragata</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div><span class="brand-mark">F</span><strong>Fragata</strong><span class="subtitle">Servidor de cámaras</span></div>
+    <div class="top-actions"><span id="queueBadge" class="badge">0 subidas</span><button id="logoutButton" class="ghost hidden">Cerrar sesión</button></div>
+  </header>
+  <main class="layout">
+    <section class="panel add-panel">
+      <div class="section-head"><div><h1>Agregar cámara</h1><p>Introduce solo la IP y las credenciales. Fragata intentará ONVIF y después rutas RTSP conocidas.</p></div><button id="discoverButton" class="secondary">Detectar en red</button></div>
+      <div id="discoveryResults" class="discovery hidden"></div>
+      <form id="cameraForm" class="camera-form">
+        <label>Nombre<input name="name" placeholder="Oficina"></label>
+        <label>IP de la cámara<input name="host" required inputmode="decimal" placeholder="192.168.1.100"></label>
+        <label>Usuario<input name="username" placeholder="admin" autocomplete="username"></label>
+        <label>Contraseña<input name="password" type="password" autocomplete="current-password" placeholder="Contraseña del dispositivo"></label>
+        <label class="wide">URL RTSP opcional<input name="rtsp_url" placeholder="Fragata la detectará automáticamente"></label>
+        <div class="checks wide">
+          <label><input name="record" type="checkbox" checked> Grabar en MKV</label>
+          <label><input name="upload" type="checkbox"> Subir por SFTP</label>
+        </div>
+        <div class="wide form-actions"><button type="submit" class="primary">Detectar y agregar</button><span id="formStatus" role="status"></span></div>
+      </form>
+    </section>
+
+    <section>
+      <div class="section-head cameras-title"><div><h2>Cámaras</h2><p id="cameraSummary">Cargando…</p></div><button id="refreshButton" class="ghost">Actualizar</button></div>
+      <div id="cameraGrid" class="camera-grid"></div>
+      <div id="emptyState" class="empty hidden"><strong>No hay cámaras agregadas</strong><span>Usa el formulario superior para detectar la primera.</span></div>
+    </section>
+  </main>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

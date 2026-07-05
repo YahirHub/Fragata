@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Acceder · Fragata</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body class="login-body">
+  <main class="login-card">
+    <div class="login-logo">F</div>
+    <h1>Fragata</h1>
+    <p>Accede al servidor de cámaras.</p>
+    <form id="loginForm">
+      <label>Usuario<input name="username" required autocomplete="username"></label>
+      <label>Contraseña<input name="password" type="password" required autocomplete="current-password"></label>
+      <button class="primary" type="submit">Entrar</button>
+      <span id="loginStatus" role="status"></span>
+    </form>
+  </main>
+  <script src="/static/login.js" defer></script>
+</body>
+</html>

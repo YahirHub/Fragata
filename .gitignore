@@ -1,0 +1,29 @@
+# Binarios y builds
+dist/
+build/
+coverage/
+*.exe
+*.test
+*.out
+
+# Datos de ejecución y secretos
+data/
+recordings/
+.env
+*.key
+*.pem
+known_hosts
+
+# IDE y sistema operativo
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Temporales
+*.tmp
+*.partial
+*.log
+
+# Dependencias vendorizadas (solo si se generan localmente)
+vendor/

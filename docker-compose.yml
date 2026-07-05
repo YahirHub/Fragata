@@ -1,0 +1,28 @@
+services:
+  fragata:
+    build:
+      context: .
+    container_name: fragata
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      FRAGATA_LISTEN: :8080
+      FRAGATA_DATA_DIR: /data
+      FRAGATA_RECORDINGS_DIR: /data/recordings
+      TZ: America/Mexico_City
+    ports:
+      - "8080:8080"
+    volumes:
+      - fragata_data:/data
+      # Descomenta si usas una llave privada fuera del volumen de datos.
+      # - ./secrets/id_ed25519:/run/secrets/id_ed25519:ro
+    healthcheck:
+      test: ["CMD", "/fragata", "-healthcheck", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  fragata_data:
