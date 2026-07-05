@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.5.0 - 2026-07-05
+
+- Rediseña la interfaz con una estética administrativa profesional inspirada en SB Admin.
+- Añade un layout reutilizable de aplicación con sidebar, topbar, footer y navegación responsiva.
+- Añade un layout reutilizable de autenticación para el inicio de sesión.
+- Incorpora Bootstrap 5.3.8 y Bootstrap Icons 1.13.1 mediante CDN oficial de jsDelivr.
+- Implementa sidebar fijo en escritorio y menú offcanvas en teléfonos y tabletas.
+- Añade dropdown de usuario con cierre de sesión y modo Invitado cuando la autenticación está deshabilitada.
+- Agrega tarjetas de resumen para cámaras, dispositivos en línea, grabaciones y subidas pendientes.
+- Rediseña tarjetas de cámaras, formularios, diagnóstico de red, visor y controles de grabación.
+- Añade notificaciones toast y estados de carga visuales.
+- Actualiza la política CSP para permitir exclusivamente los recursos CDN necesarios.
+
+## 0.4.0 - 2026-07-05
+
+- Añade duración de archivo configurable por cámara entre 1 minuto y 24 horas.
+- Incorpora un componente web reutilizable para seleccionar minutos u horas.
+- Permite cambiar la duración mientras se graba sin reiniciar RTSP.
+- Inicia y detiene el grabador sin reiniciar el worker de la cámara.
+- Abre y escribe el segmento siguiente antes de finalizar el anterior.
+- Finaliza los MKV anteriores en segundo plano para evitar pausas por `fsync`.
+- Mantiene el archivo actual si falla la creación del siguiente segmento.
+- Detecta desconexiones RTSP y separa cada sesión en un MKV independiente.
+- Añade una suscripción confiable de access units para el grabador.
+- Migra cámaras existentes al valor predeterminado configurado en `.env`.
+
 ## 0.3.0 - 2026-07-05
 
 - Selecciona el stream de mayor resolución aunque use H.265.

@@ -16,15 +16,16 @@ import (
 )
 
 type AddRequest struct {
-	Name        string `json:"name"`
-	Host        string `json:"host"`
-	Username    string `json:"username"`
-	Password    string `json:"password"`
-	RTSPURL     string `json:"rtsp_url"`
-	Enabled     *bool  `json:"enabled,omitempty"`
-	Record      *bool  `json:"record,omitempty"`
-	Upload      *bool  `json:"upload,omitempty"`
-	InsecureTLS bool   `json:"insecure_tls,omitempty"`
+	Name                   string `json:"name"`
+	Host                   string `json:"host"`
+	Username               string `json:"username"`
+	Password               string `json:"password"`
+	RTSPURL                string `json:"rtsp_url"`
+	Enabled                *bool  `json:"enabled,omitempty"`
+	Record                 *bool  `json:"record,omitempty"`
+	SegmentDurationSeconds int64  `json:"segment_duration_seconds,omitempty"`
+	Upload                 *bool  `json:"upload,omitempty"`
+	InsecureTLS            bool   `json:"insecure_tls,omitempty"`
 }
 
 type ProbeRequest struct {
@@ -258,13 +259,14 @@ func prepareCamera(cfg config.Config, request AddRequest) (model.Camera, string,
 	}
 
 	base := model.Camera{
-		Name:     strings.TrimSpace(request.Name),
-		Host:     host,
-		Username: username,
-		Password: password,
-		Enabled:  boolValue(request.Enabled, true),
-		Record:   boolValue(request.Record, false),
-		Upload:   boolValue(request.Upload, cfg.SFTP.Enabled),
+		Name:                   strings.TrimSpace(request.Name),
+		Host:                   host,
+		Username:               username,
+		Password:               password,
+		Enabled:                boolValue(request.Enabled, true),
+		Record:                 boolValue(request.Record, false),
+		SegmentDurationSeconds: request.SegmentDurationSeconds,
+		Upload:                 boolValue(request.Upload, cfg.SFTP.Enabled),
 	}
 	if base.Name == "" {
 		base.Name = "Cámara " + host

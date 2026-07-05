@@ -4,6 +4,7 @@ let statuses = [];
 const peers = new Map();
 
 const q = (selector) => document.querySelector(selector);
+const notify = (message, type = 'primary') => window.FragataUI?.toast(message, type);
 const esc = (value) => String(value ?? '').replace(/[&<>'"]/g, (character) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;',
 }[character]));
@@ -24,8 +25,10 @@ async function api(path, options = {}) {
 
 async function init() {
   session = await api('/api/session');
-  q('#logoutButton').classList.toggle('hidden', !session.auth_enabled);
-  q('#ffmpegBadge').classList.toggle('hidden', !session.ffmpeg_available);
+  q('fragata-app-layout')?.setSession(session);
+  q('fragata-app-layout')?.setSubtitle('Cámaras, grabaciones y respaldos');
+  q('#ffmpegBadge')?.classList.toggle('hidden', !session.ffmpeg_available);
+  q('#newCameraSegmentDuration').valueSeconds = session.default_segment_duration_seconds || 300;
   await refreshAll();
   setInterval(refreshStatus, 3000);
   setInterval(refreshUploads, 7000);
@@ -41,11 +44,13 @@ async function refreshStatus() {
   statuses = await api('/api/status');
   for (const camera of cameras) updateCard(camera);
   q('#cameraSummary').textContent = `${cameras.length} cámara${cameras.length === 1 ? '' : 's'} · ${statuses.filter((status) => status.state === 'online').length} en línea`;
+  updateStats();
 }
 
 async function refreshUploads() {
   const jobs = await api('/api/uploads');
-  q('#queueBadge').textContent = `${jobs.length} subida${jobs.length === 1 ? '' : 's'}`;
+  q('#queueBadge').innerHTML = `<i class="bi bi-cloud-arrow-up me-1"></i>${jobs.length} subida${jobs.length === 1 ? '' : 's'}`;
+  q('#statsUploads').textContent = String(jobs.length);
 }
 
 function renderCameras() {
@@ -53,42 +58,88 @@ function renderCameras() {
   q('#cameraGrid').innerHTML = '';
   q('#emptyState').classList.toggle('hidden', cameras.length > 0);
   for (const camera of cameras) {
+    const column = document.createElement('div');
+    column.className = 'col-12 col-md-6 col-xxl-4';
     const card = document.createElement('article');
     card.className = 'camera-card';
     card.id = `camera-${camera.id}`;
     const primaryResolution = camera.width && camera.height ? `${camera.width}×${camera.height}` : 'Resolución pendiente';
     const previewResolution = camera.live_width && camera.live_height ? `${camera.live_width}×${camera.live_height}` : '';
     const previewText = camera.codec === 'H264'
-      ? 'Vista directa del stream principal'
-      : (camera.live_codec === 'H264' ? `Vista alternativa H.264${previewResolution ? ` · ${previewResolution}` : ''}` : 'Vista H.265 mediante FFmpeg cuando esté disponible');
-    card.innerHTML = `<div class="video-wrap"><video id="video-${camera.id}" autoplay muted playsinline></video><div class="video-placeholder" id="placeholder-${camera.id}">Vista detenida</div></div><div class="camera-content"><div class="camera-line"><h3>${esc(camera.name)}</h3><span class="state" data-state>iniciando</span></div><div class="meta"><span>${esc(camera.host)}</span><span data-codec>${esc(camera.codec || '—')}</span><span>${esc(primaryResolution)} · calidad principal</span><span data-live-mode>${esc(previewText)}</span><span data-record>${camera.record ? 'MKV activo' : 'Grabación apagada'}</span></div><div class="record-control"><span><strong>Grabación</strong><small>Conserva el stream principal sin recomprimir</small></span><label class="switch"><input type="checkbox" data-record-toggle aria-label="Activar grabación de ${esc(camera.name)}" ${camera.record ? 'checked' : ''}><span class="switch-slider"></span></label></div><div class="error" data-error></div><div class="card-actions"><button class="secondary" data-live>Vista rápida</button><a class="button-link primary" href="/camera/${encodeURIComponent(camera.id)}">Abrir cámara</a><button class="ghost" data-redetect>Redetectar calidad</button><button class="ghost danger" data-delete>Eliminar</button></div></div>`;
+      ? 'Stream principal directo'
+      : (camera.live_codec === 'H264' ? `Substream H.264${previewResolution ? ` · ${previewResolution}` : ''}` : 'H.265 mediante FFmpeg');
+    card.innerHTML = `
+      <div class="video-wrap">
+        <video id="video-${camera.id}" autoplay muted playsinline></video>
+        <div class="video-placeholder" id="placeholder-${camera.id}"><span><i class="bi bi-play-circle me-2"></i>Vista detenida</span></div>
+      </div>
+      <div class="camera-content">
+        <div class="camera-line"><h3 title="${esc(camera.name)}">${esc(camera.name)}</h3><span class="camera-status starting" data-state><span class="status-dot"></span>iniciando</span></div>
+        <div class="camera-meta">
+          <span title="${esc(camera.host)}"><i class="bi bi-hdd-network me-1"></i>${esc(camera.host)}</span>
+          <span data-codec><i class="bi bi-file-earmark-play me-1"></i>${esc(camera.codec || '—')}</span>
+          <span title="${esc(primaryResolution)}"><i class="bi bi-aspect-ratio me-1"></i>${esc(primaryResolution)}</span>
+          <span data-live-mode title="${esc(previewText)}"><i class="bi bi-broadcast me-1"></i>${esc(previewText)}</span>
+          <span data-record class="grid-span-2"><i class="bi bi-record-circle me-1"></i>${camera.record ? 'MKV activo' : 'Grabación apagada'}</span>
+        </div>
+        <div class="record-settings">
+          <div class="record-control">
+            <span><strong>Grabación</strong><small>Stream principal sin recomprimir</small></span>
+            <div class="form-check form-switch form-switch-lg m-0"><input class="form-check-input" type="checkbox" role="switch" data-record-toggle aria-label="Activar grabación de ${esc(camera.name)}" ${camera.record ? 'checked' : ''}></div>
+          </div>
+          <div class="record-duration-row">
+            <span><strong>Duración por archivo</strong><small data-duration-label>${esc(formatDuration(camera.segment_duration_seconds))}</small></span>
+            <fragata-duration-picker data-segment-duration value-seconds="${camera.segment_duration_seconds || 300}"></fragata-duration-picker>
+          </div>
+        </div>
+        <div class="camera-error" data-error></div>
+        <div class="card-actions">
+          <button class="btn btn-outline-primary" data-live><i class="bi bi-eye me-1"></i>Vista rápida</button>
+          <a class="btn btn-primary" href="/camera/${encodeURIComponent(camera.id)}"><i class="bi bi-arrows-fullscreen me-1"></i>Abrir cámara</a>
+          <button class="btn btn-outline-secondary" data-redetect><i class="bi bi-arrow-repeat me-1"></i>Redetectar</button>
+          <button class="btn btn-outline-danger" data-delete><i class="bi bi-trash3 me-1"></i>Eliminar</button>
+        </div>
+      </div>`;
     card.querySelector('[data-live]').addEventListener('click', () => toggleLive(camera.id));
     card.querySelector('[data-record-toggle]').addEventListener('change', (event) => setRecording(camera.id, event.currentTarget));
+    card.querySelector('[data-segment-duration]').addEventListener('durationchange', (event) => setSegmentDuration(camera.id, event.currentTarget, event.detail.seconds));
     card.querySelector('[data-redetect]').addEventListener('click', (event) => redetectCamera(camera.id, event.currentTarget));
     card.querySelector('[data-delete]').addEventListener('click', () => deleteCamera(camera.id, camera.name));
-    q('#cameraGrid').append(card);
+    column.append(card);
+    q('#cameraGrid').append(column);
     updateCard(camera);
   }
   q('#cameraSummary').textContent = `${cameras.length} cámara${cameras.length === 1 ? '' : 's'}`;
+  updateStats();
 }
 
+function updateStats() {
+  q('#statsTotal').textContent = String(cameras.length);
+  q('#statsOnline').textContent = String(statuses.filter((status) => status.state === 'online').length);
+  q('#statsRecording').textContent = String(statuses.filter((status) => Boolean(status.recording_path)).length);
+}
 function updateCard(camera) {
   const card = q(`#camera-${CSS.escape(camera.id)}`);
   if (!card) return;
   const status = statuses.find((item) => item.camera_id === camera.id) || { state: 'starting' };
   const state = card.querySelector('[data-state]');
   state.textContent = translateState(status.state);
-  state.className = `state ${status.state}`;
-  card.querySelector('[data-codec]').textContent = status.codec || camera.codec || '—';
+  state.className = `camera-status ${status.state || 'starting'}`;
+  state.innerHTML = `<span class="status-dot"></span>${translateState(status.state)}`;
+  card.querySelector('[data-codec]').innerHTML = `<i class="bi bi-file-earmark-play me-1"></i>${esc(status.codec || camera.codec || '—')}`;
   card.querySelector('[data-error]').textContent = status.last_error || '';
-  card.querySelector('[data-record]').textContent = status.recording_path ? 'Grabando MKV' : (camera.record ? 'Esperando fotograma clave' : 'Grabación apagada');
+  card.querySelector('[data-record]').innerHTML = `<i class="bi bi-record-circle me-1"></i>${status.recording_path ? 'Grabando MKV' : (camera.record ? 'Esperando fotograma clave' : 'Grabación apagada')}`;
   const toggle = card.querySelector('[data-record-toggle]');
   if (!toggle.disabled) toggle.checked = camera.record;
+  const durationPicker = card.querySelector('[data-segment-duration]');
+  if (durationPicker && !durationPicker.disabled) durationPicker.valueSeconds = camera.segment_duration_seconds;
+  const durationLabel = card.querySelector('[data-duration-label]');
+  if (durationLabel) durationLabel.textContent = formatDuration(camera.segment_duration_seconds);
   const liveMode = card.querySelector('[data-live-mode]');
-  if (status.live_mode) liveMode.textContent = liveModeLabel(status.live_mode, camera);
+  if (status.live_mode) liveMode.innerHTML = `<i class="bi bi-broadcast me-1"></i>${esc(liveModeLabel(status.live_mode, camera))}`;
   const liveButton = card.querySelector('[data-live]');
   liveButton.disabled = status.state !== 'online' && !peers.has(camera.id);
-  liveButton.textContent = peers.has(camera.id) ? 'Detener vista' : 'Ver en vivo';
+  liveButton.innerHTML = peers.has(camera.id) ? '<i class="bi bi-stop-circle me-1"></i>Detener vista' : '<i class="bi bi-eye me-1"></i>Vista rápida';
 }
 
 function liveModeLabel(mode, camera) {
@@ -133,12 +184,12 @@ async function toggleLive(id) {
     if (camera) {
       const card = q(`#camera-${CSS.escape(id)}`);
       const liveMode = card?.querySelector('[data-live-mode]');
-      if (liveMode && answer.mode) liveMode.textContent = liveModeLabel(answer.mode, camera);
+      if (liveMode && answer.mode) liveMode.innerHTML = `<i class="bi bi-broadcast me-1"></i>${esc(liveModeLabel(answer.mode, camera))}`;
     }
     if (camera) updateCard(camera);
   } catch (error) {
     stopLive(id);
-    alert(error.message);
+    notify(error.message, 'danger');
   }
 }
 
@@ -146,8 +197,8 @@ async function redetectCamera(id, button) {
   const camera = cameras.find((item) => item.id === id);
   if (!camera) return;
   button.disabled = true;
-  const original = button.textContent;
-  button.textContent = 'Detectando…';
+  const original = button.innerHTML;
+  button.innerHTML = '<span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>Detectando…';
   stopLive(id);
   try {
     const result = await api(`/api/cameras/${encodeURIComponent(id)}/redetect`, {
@@ -155,13 +206,13 @@ async function redetectCamera(id, button) {
       body: '{}',
     });
     const updated = result.camera;
-    alert(`Calidad actualizada: ${updated.codec || 'video'} ${updated.width && updated.height ? `${updated.width}×${updated.height}` : ''}`.trim());
+    notify(`Calidad actualizada: ${updated.codec || 'video'} ${updated.width && updated.height ? `${updated.width}×${updated.height}` : ''}`.trim(), 'success');
     await refreshAll();
   } catch (error) {
-    alert(error.message);
+    notify(error.message, 'danger');
   } finally {
     button.disabled = false;
-    button.textContent = original;
+    button.innerHTML = original;
   }
 }
 
@@ -176,13 +227,43 @@ async function setRecording(id, toggle) {
       body: JSON.stringify({ record: toggle.checked }),
     });
     Object.assign(camera, updated);
-    await refreshAll();
+    updateCard(camera);
   } catch (error) {
     toggle.checked = previous;
-    alert(error.message);
+    notify(error.message, 'danger');
   } finally {
     toggle.disabled = false;
   }
+}
+
+async function setSegmentDuration(id, picker, seconds) {
+  const camera = cameras.find((item) => item.id === id);
+  if (!camera) return;
+  const previous = camera.segment_duration_seconds;
+  picker.disabled = true;
+  try {
+    const updated = await api(`/api/cameras/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ segment_duration_seconds: seconds }),
+    });
+    Object.assign(camera, updated);
+    updateCard(camera);
+  } catch (error) {
+    picker.valueSeconds = previous;
+    notify(error.message, 'danger');
+  } finally {
+    picker.disabled = false;
+  }
+}
+
+function formatDuration(seconds) {
+  const value = Number(seconds || 300);
+  if (value % 3600 === 0) {
+    const hours = value / 3600;
+    return `${hours} hora${hours === 1 ? '' : 's'} por archivo`;
+  }
+  const minutes = Math.round(value / 60);
+  return `${minutes} minuto${minutes === 1 ? '' : 's'} por archivo`;
 }
 
 function waitICE(peer) {
@@ -218,6 +299,7 @@ function cameraFormData() {
   const form = q('#cameraForm');
   const data = Object.fromEntries(new FormData(form));
   data.record = false;
+  data.segment_duration_seconds = q('#newCameraSegmentDuration').valueSeconds;
   data.upload = form.elements.upload.checked;
   data.host = String(data.host || '').trim();
   data.rtsp_url = String(data.rtsp_url || '').trim();
@@ -272,6 +354,8 @@ q('#cameraForm').addEventListener('submit', async (event) => {
     const openPorts = result.diagnostics?.open_ports?.length ? ` Puertos detectados: ${result.diagnostics.open_ports.join(', ')}.` : '';
     status.textContent = `Cámara agregada mediante ${friendlyMethod(result.detection_method)}.${openPorts}`;
     form.reset();
+    q('#newCameraSegmentDuration').valueSeconds = session.default_segment_duration_seconds || 300;
+    notify('Cámara agregada correctamente.', 'success');
     await refreshAll();
   } catch (error) {
     status.textContent = error.message;
@@ -293,11 +377,11 @@ q('#discoverButton').addEventListener('click', async () => {
   const button = q('#discoverButton');
   const box = q('#discoveryResults');
   button.disabled = true;
-  button.textContent = 'Buscando…';
+  button.innerHTML = '<span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>Buscando…';
   try {
     const devices = await api('/api/discovery', { method: 'POST', body: '{}' });
     box.classList.remove('hidden');
-    box.innerHTML = devices.length ? devices.map((device) => `<div class="device"><div><strong>${esc(device.remote_address)}</strong><br><small>${esc(device.xaddrs?.[0] || 'ONVIF')}</small></div><button class="ghost" data-ip="${esc(device.remote_address)}">Usar IP</button></div>`).join('') : 'No se encontraron cámaras ONVIF. Puedes introducir la IP o una URL RTSP manualmente.';
+    box.innerHTML = devices.length ? devices.map((device) => `<div class="device"><div><strong>${esc(device.remote_address)}</strong><br><small>${esc(device.xaddrs?.[0] || 'ONVIF')}</small></div><button class="btn btn-sm btn-outline-primary" data-ip="${esc(device.remote_address)}"><i class="bi bi-arrow-right-circle me-1"></i>Usar IP</button></div>`).join('') : 'No se encontraron cámaras ONVIF. Puedes introducir la IP o una URL RTSP manualmente.';
     box.querySelectorAll('[data-ip]').forEach((element) => element.addEventListener('click', () => {
       q('#cameraForm').elements.host.value = element.dataset.ip;
       box.classList.add('hidden');
@@ -307,7 +391,7 @@ q('#discoverButton').addEventListener('click', async () => {
     box.textContent = error.message;
   } finally {
     button.disabled = false;
-    button.textContent = 'Detectar en red';
+    button.innerHTML = '<i class="bi bi-radar me-2"></i>Detectar en red';
   }
 });
 
@@ -319,7 +403,7 @@ async function deleteCamera(id, name) {
 }
 
 q('#refreshButton').addEventListener('click', refreshAll);
-q('#logoutButton').addEventListener('click', async () => {
+q('fragata-app-layout')?.addEventListener('fragata-logout', async () => {
   await api('/api/logout', { method: 'POST', body: '{}' });
   location.href = '/login';
 });

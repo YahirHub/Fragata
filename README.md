@@ -21,15 +21,17 @@ Incluido:
 - Recepción RTSP H.264 y H.265 sin recomprimir la grabación.
 - Detección automática de FFmpeg en `PATH` para visualizar el stream H.265 principal manteniendo su resolución.
 - Fallback a un substream H.264 cuando FFmpeg no está disponible o no puede iniciar.
-- Grabación MKV segmentada y cierre atómico desde `.mkv.partial`.
+- Grabación MKV continua con duración configurable por cámara, rotación sin huecos y cierre atómico desde `.mkv.partial`.
 - Recuperación conservadora de parciales después de un apagado inesperado.
 - Vista en vivo WebRTC, página dedicada por cámara y botón de pantalla completa.
-- Grabación apagada al agregar una cámara y switch persistente para iniciarla o detenerla.
+- Grabación apagada al agregar una cámara, switch persistente y componente reutilizable para elegir entre 1 minuto y 24 horas por archivo.
 - Cola SFTP persistente, reintentos con backoff, `known_hosts`, archivo temporal remoto y checksum SHA-256.
 - Login opcional definido en `.env`.
 - Sesiones persistentes, CSRF, cookies `HttpOnly` y límite básico de intentos de acceso.
 - Credenciales de cámaras cifradas con AES-256-GCM dentro del estado local.
-- Panel web embebido y API HTTP.
+- Panel web profesional y responsivo con layout administrativo, sidebar, visor dedicado, Bootstrap e iconos por CDN.
+- Layout de autenticación independiente, dropdown de usuario y modo Invitado cuando el login está deshabilitado.
+- API HTTP y frontend propio embebido en el binario; únicamente Bootstrap y Bootstrap Icons se cargan desde CDN.
 - Docker, Compose con red LAN del host, systemd y scripts de compilación estática.
 - Diagnóstico de puertos desde el mismo proceso que intenta abrir la cámara.
 
@@ -44,6 +46,7 @@ No incluido todavía:
 
 - Go 1.26.4 o compatible con la versión indicada en `go.mod`.
 - Acceso inicial a internet para ejecutar `go mod tidy` y generar `go.sum`.
+- El navegador que abre el panel debe poder acceder a `cdn.jsdelivr.net` para cargar Bootstrap y Bootstrap Icons. El servidor Fragata no descarga esos archivos.
 - Una cámara con RTSP H.264 o H.265.
 - Para visualizar el stream H.265 principal manteniendo su resolución, una instalación de FFmpeg con el encoder `libx264`. Sin FFmpeg, Fragata intenta usar un substream H.264 de la cámara.
 - Acceso a la misma red local para WS-Discovery, salvo que se introduzca la IP manualmente.
@@ -82,6 +85,20 @@ Cuando Fragata esté detrás de HTTPS:
 ```dotenv
 FRAGATA_SECURE_COOKIES=true
 ```
+
+
+## Interfaz web
+
+Fragata usa dos componentes de layout reutilizables:
+
+- `fragata-auth-layout`: pantalla de inicio de sesión independiente.
+- `fragata-app-layout`: sidebar, topbar, dropdown de usuario, contenido y footer compartidos por dashboard y visor.
+
+En escritorio, el sidebar permanece fijo a la izquierda. En pantallas pequeñas se convierte en un menú `offcanvas` accesible desde la barra superior. El dashboard muestra métricas de cámaras, conexiones, grabaciones y subidas; las tarjetas y formularios se reorganizan automáticamente en teléfonos.
+
+Cuando el login está configurado, el dropdown muestra el usuario administrador y permite cerrar sesión. Si `FRAGATA_ADMIN_USER` o `FRAGATA_ADMIN_PASSWORD` están vacíos, muestra `Invitado` y señala que la autenticación está desactivada.
+
+Bootstrap 5.3.8 y Bootstrap Icons 1.13.1 se cargan desde jsDelivr con versión fija. La política CSP permite únicamente ese CDN para scripts, estilos y fuentes, manteniendo bloqueados otros orígenes.
 
 ## Agregar una cámara
 
@@ -221,7 +238,11 @@ Al terminar:
 3. Se renombra atómicamente a `.mkv`.
 4. Se registra para SFTP, cuando corresponde.
 
-La rotación ocurre en un fotograma clave después de `FRAGATA_SEGMENT_DURATION`. El valor mínimo es 10 segundos. Una cámara nueva siempre se guarda con la grabación apagada: debe activarse después con el switch **Grabación** en el panel o en su página dedicada. Al cambiarlo, la preferencia queda persistida y el worker se reinicia limpiamente.
+`FRAGATA_SEGMENT_DURATION` define únicamente el valor inicial para cámaras nuevas y la migración de cámaras antiguas. Después, cada cámara conserva su propia duración desde el panel, entre 1 minuto y 24 horas por archivo.
+
+La rotación se realiza en el primer fotograma clave disponible al cumplir la duración. Fragata abre el MKV siguiente y escribe primero ese fotograma clave; el archivo anterior se sincroniza, cierra y renombra en segundo plano. Así, `fsync` no detiene el consumo del stream y no se descarta el fotograma de transición. Si no se puede crear el archivo siguiente, el actual continúa grabando en lugar de perder video.
+
+Cuando la cámara se desconecta, Fragata finaliza el segmento de esa sesión. Al reconectar espera un nuevo fotograma clave y comienza otro MKV, evitando mezclar timestamps reiniciados dentro del mismo archivo. Activar, desactivar o cambiar la duración de grabación ya no reinicia la conexión RTSP. Una cámara nueva siempre se guarda con la grabación apagada y se activa después con su switch.
 
 ## SFTP
 

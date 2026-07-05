@@ -1,57 +1,82 @@
 <!doctype html>
-<html lang="es">
+<html lang="es" data-bs-theme="light">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Fragata</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#4e73df">
+  <title>Dashboard · Fragata</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-  <header class="topbar">
-    <div><span class="brand-mark">F</span><strong>Fragata</strong><span class="subtitle">Servidor de cámaras</span></div>
-    <div class="top-actions"><span id="ffmpegBadge" class="badge hidden">FFmpeg disponible</span><span id="queueBadge" class="badge">0 subidas</span><button id="logoutButton" class="ghost hidden">Cerrar sesión</button></div>
-  </header>
-  <main class="layout">
-    <section class="panel add-panel">
-      <div class="section-head">
-        <div>
-          <h1>Agregar cámara</h1>
-          <p>Fragata elegirá el stream de mayor resolución para conservarlo sin recomprimir. La grabación permanece apagada hasta que la actives.</p>
-        </div>
-        <div class="head-actions">
-          <button id="networkDiagnosticButton" class="ghost">Diagnosticar red</button>
-          <button id="discoverButton" class="secondary">Detectar en red</button>
-        </div>
+  <fragata-app-layout page-title="Panel de control" page-icon="bi-speedometer2" active="dashboard">
+    <section id="dashboard" class="page-heading">
+      <div>
+        <nav aria-label="breadcrumb"><ol class="breadcrumb small mb-2"><li class="breadcrumb-item active" aria-current="page">Dashboard</li></ol></nav>
+        <h2>Resumen general</h2>
+        <p>Estado de tus cámaras, grabaciones y respaldos.</p>
       </div>
-      <div id="networkDiagnosticResults" class="network-diagnostic hidden"></div>
-      <div id="discoveryResults" class="discovery hidden"></div>
-      <form id="cameraForm" class="camera-form">
-        <label>Nombre<input name="name" placeholder="Oficina"></label>
-        <label>IP de la cámara<input name="host" inputmode="decimal" placeholder="192.168.10.50"></label>
-        <label>Usuario<input name="username" placeholder="admin" autocomplete="username"></label>
-        <label>Contraseña<input name="password" type="password" autocomplete="current-password" placeholder="Contraseña del dispositivo"></label>
-        <label class="wide">
-          URL RTSP manual
-          <div class="input-action">
-            <input name="rtsp_url" placeholder="rtsp://192.168.10.50:554/cam/realmonitor?channel=1&subtype=0">
-            <button type="button" id="probeRTSPButton" class="secondary">Probar URL</button>
-          </div>
-          <small>Es opcional. Puedes pegar la URL completa; se comprobará antes de guardarla. Es más seguro escribir usuario y contraseña en sus campos separados.</small>
-        </label>
-        <div class="checks wide">
-          <label><input name="upload" type="checkbox"> Subir por SFTP cuando actives la grabación</label>
-          <small>La cámara se guarda con la grabación apagada. Actívala después desde su switch.</small>
-        </div>
-        <div class="wide form-actions"><button type="submit" class="primary">Detectar y guardar</button><span id="formStatus" role="status"></span></div>
-      </form>
+      <button id="refreshButton" class="btn btn-outline-primary"><i class="bi bi-arrow-clockwise me-2"></i>Actualizar</button>
     </section>
 
-    <section>
-      <div class="section-head cameras-title"><div><h2>Cámaras</h2><p id="cameraSummary">Cargando…</p></div><button id="refreshButton" class="ghost">Actualizar</button></div>
-      <div id="cameraGrid" class="camera-grid"></div>
-      <div id="emptyState" class="empty hidden"><strong>No hay cámaras agregadas</strong><span>Usa el formulario superior para detectar la primera.</span></div>
+    <section class="row g-3 g-xl-4 mb-4" aria-label="Resumen del sistema">
+      <div class="col-6 col-xl-3"><article class="stat-card stat-primary"><div><span>Cámaras</span><strong id="statsTotal">0</strong><small>Dispositivos agregados</small></div><i class="bi bi-camera-video-fill"></i></article></div>
+      <div class="col-6 col-xl-3"><article class="stat-card stat-success"><div><span>En línea</span><strong id="statsOnline">0</strong><small>Con conexión activa</small></div><i class="bi bi-wifi"></i></article></div>
+      <div class="col-6 col-xl-3"><article class="stat-card stat-warning"><div><span>Grabando</span><strong id="statsRecording">0</strong><small>Streams guardándose</small></div><i class="bi bi-record-circle-fill"></i></article></div>
+      <div class="col-6 col-xl-3"><article class="stat-card stat-info"><div><span>Subidas</span><strong id="statsUploads">0</strong><small>Trabajos pendientes</small></div><i class="bi bi-cloud-arrow-up-fill"></i></article></div>
     </section>
-  </main>
+
+    <section id="add-camera" class="card dashboard-card mb-4">
+      <div class="card-header bg-transparent d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3">
+        <div><span class="section-kicker">Configuración</span><h2 class="h5 mb-1">Agregar cámara</h2><p class="text-body-secondary mb-0">Fragata detectará el stream de mayor calidad. La grabación comienza desactivada.</p></div>
+        <div class="d-flex flex-column flex-sm-row gap-2">
+          <button id="networkDiagnosticButton" class="btn btn-outline-secondary"><i class="bi bi-activity me-2"></i>Diagnosticar red</button>
+          <button id="discoverButton" class="btn btn-outline-primary"><i class="bi bi-radar me-2"></i>Detectar en red</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div id="networkDiagnosticResults" class="alert alert-light border hidden" role="status"></div>
+        <div id="discoveryResults" class="discovery-results hidden"></div>
+        <form id="cameraForm" class="row g-3">
+          <div class="col-md-6 col-xl-3"><label class="form-label" for="cameraName">Nombre</label><input id="cameraName" class="form-control" name="name" placeholder="Oficina"></div>
+          <div class="col-md-6 col-xl-3"><label class="form-label" for="cameraHost">IP de la cámara</label><input id="cameraHost" class="form-control" name="host" inputmode="decimal" placeholder="192.168.10.50"></div>
+          <div class="col-md-6 col-xl-3"><label class="form-label" for="cameraUsername">Usuario</label><input id="cameraUsername" class="form-control" name="username" placeholder="admin" autocomplete="username"></div>
+          <div class="col-md-6 col-xl-3"><label class="form-label" for="cameraPassword">Contraseña</label><input id="cameraPassword" class="form-control" name="password" type="password" autocomplete="current-password" placeholder="Contraseña del dispositivo"></div>
+          <div class="col-12">
+            <label class="form-label" for="cameraRTSP">URL RTSP manual <span class="text-body-secondary fw-normal">(opcional)</span></label>
+            <div class="input-group"><span class="input-group-text"><i class="bi bi-link-45deg"></i></span><input id="cameraRTSP" class="form-control" name="rtsp_url" placeholder="rtsp://192.168.10.50:554/cam/realmonitor?channel=1&subtype=0"><button type="button" id="probeRTSPButton" class="btn btn-outline-primary"><i class="bi bi-check2-circle me-2"></i>Probar URL</button></div>
+            <div class="form-text">Puedes pegar la URL completa; las credenciales se guardarán cifradas y fuera de la URL persistida.</div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Duración por archivo</label>
+            <fragata-duration-picker id="newCameraSegmentDuration" value-seconds="300"></fragata-duration-picker>
+            <div class="form-text">Se aplicará cuando actives la grabación.</div>
+          </div>
+          <div class="col-md-6 d-flex align-items-end">
+            <div class="form-check form-switch form-switch-lg mb-2"><input class="form-check-input" name="upload" type="checkbox" role="switch" id="uploadSwitch"><label class="form-check-label" for="uploadSwitch"><strong>Subir por SFTP</strong><small class="d-block text-body-secondary">Encolar cada MKV cerrado para respaldo.</small></label></div>
+          </div>
+          <div class="col-12 d-flex flex-column flex-sm-row align-items-sm-center gap-3 pt-2">
+            <button type="submit" class="btn btn-primary px-4"><i class="bi bi-plus-circle me-2"></i>Detectar y guardar</button>
+            <span id="formStatus" class="small text-body-secondary" role="status"></span>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section id="cameras" class="card dashboard-card">
+      <div class="card-header bg-transparent d-flex align-items-center justify-content-between gap-3">
+        <div><span class="section-kicker">Dispositivos</span><h2 class="h5 mb-1">Cámaras</h2><p id="cameraSummary" class="text-body-secondary mb-0">Cargando…</p></div>
+      </div>
+      <div class="card-body">
+        <div id="cameraGrid" class="row g-4"></div>
+        <div id="emptyState" class="empty-state hidden"><span class="empty-icon"><i class="bi bi-camera-video-off"></i></span><strong>No hay cámaras agregadas</strong><span>Usa el formulario superior para detectar la primera.</span></div>
+      </div>
+    </section>
+  </fragata-app-layout>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
+  <script src="/static/layouts.js" defer></script>
+  <script src="/static/duration-picker.js" defer></script>
   <script src="/static/app.js" defer></script>
 </body>
 </html>

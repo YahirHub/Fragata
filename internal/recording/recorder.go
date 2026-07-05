@@ -21,70 +21,143 @@ type CompletedFile struct {
 }
 
 type Recorder struct {
-	CameraID        string
-	BaseDir         string
-	SegmentDuration time.Duration
-	Hub             *stream.Hub
-	OnStarted       func(path string, started time.Time)
-	OnCompleted     func(CompletedFile)
-	OnError         func(error)
+	CameraID                string
+	BaseDir                 string
+	SegmentDuration         time.Duration
+	SegmentDurationProvider func() time.Duration
+	Hub                     *stream.Hub
+	OnStarted               func(path string, started time.Time)
+	OnCompleted             func(CompletedFile)
+	OnError                 func(error)
+}
+
+type finalizeRequest struct {
+	segment *segment
+	endedAt time.Time
 }
 
 func (r *Recorder) Run(ctx context.Context) error {
 	if r.Hub == nil {
 		return errors.New("hub requerido")
 	}
-	if r.SegmentDuration < 10*time.Second {
-		return errors.New("segmento mínimo: 10s")
+	if r.currentDuration() <= 0 {
+		return errors.New("duración de segmento inválida")
 	}
-	accessUnits, unsubscribe := r.Hub.SubscribeAccessUnits(256)
+
+	// A large buffer protects the recorder from short disk stalls. Segment
+	// finalization runs separately so Sync/Close never blocks incoming video.
+	accessUnits, unsubscribe := r.Hub.SubscribeAccessUnitsReliable(2048)
 	defer unsubscribe()
+
+	finalizeQueue := make(chan finalizeRequest, 8)
+	finalizerDone := make(chan struct{})
+	go func() {
+		defer close(finalizerDone)
+		for request := range finalizeQueue {
+			if request.segment == nil {
+				continue
+			}
+			if err := request.segment.finish(request.endedAt); err != nil {
+				r.report(fmt.Errorf("finalizar MKV: %w", err))
+				continue
+			}
+			r.completed(request.segment)
+		}
+	}()
+
+	finishAll := func(current *segment) {
+		if current != nil {
+			finalizeQueue <- finalizeRequest{segment: current, endedAt: time.Now()}
+		}
+		close(finalizeQueue)
+		<-finalizerDone
+	}
 
 	var current *segment
 	for {
 		select {
 		case <-ctx.Done():
-			if current != nil {
-				if err := current.finish(time.Now()); err != nil {
-					r.report(err)
-				}
-				r.completed(current)
-			}
+			finishAll(current)
 			return nil
 		case au, ok := <-accessUnits:
 			if !ok {
+				finishAll(current)
 				return nil
 			}
+
+			if au.Discontinuity {
+				if current != nil && (au.Generation == 0 || current.generation == au.Generation) {
+					finalizeQueue <- finalizeRequest{segment: current, endedAt: time.Now()}
+					current = nil
+				}
+				continue
+			}
+
+			if current != nil && au.Generation != 0 && current.generation != 0 && current.generation != au.Generation {
+				finalizeQueue <- finalizeRequest{segment: current, endedAt: time.Now()}
+				current = nil
+			}
+
 			info := r.Hub.Info()
 			if current == nil {
 				if !au.KeyFrame || !ready(info) {
 					continue
 				}
-				seg, err := r.start(info)
+				seg, err := r.start(info, au.Generation)
 				if err != nil {
-					return err
-				}
-				current = seg
-			}
-			if au.KeyFrame && time.Since(current.startedAt) >= r.SegmentDuration {
-				if err := current.finish(time.Now()); err != nil {
 					r.report(err)
-				} else {
-					r.completed(current)
+					continue
 				}
-				seg, err := r.start(info)
-				if err != nil {
-					return err
+				if err := seg.writer.WriteAccessUnit(au); err != nil {
+					_ = seg.discard()
+					r.report(fmt.Errorf("iniciar MKV: %w", err))
+					continue
 				}
+				seg.announce(r.OnStarted)
 				current = seg
+				continue
 			}
+
+			duration := r.currentDuration()
+			if au.KeyFrame && duration > 0 && time.Since(current.startedAt) >= duration {
+				// Open and write the next segment before closing the previous one.
+				// The boundary keyframe belongs to the new file, so both files remain
+				// independently decodable without dropping an access unit.
+				next, err := r.start(info, au.Generation)
+				if err == nil {
+					err = next.writer.WriteAccessUnit(au)
+				}
+				if err == nil {
+					next.announce(r.OnStarted)
+					previous := current
+					current = next
+					finalizeQueue <- finalizeRequest{segment: previous, endedAt: time.Now()}
+					continue
+				}
+				if next != nil {
+					_ = next.discard()
+				}
+				r.report(fmt.Errorf("rotar MKV sin interrumpir el stream: %w", err))
+				// If opening the next file fails, keep the current file running so
+				// video is not discarded merely because rotation failed.
+			}
+
 			if err := current.writer.WriteAccessUnit(au); err != nil {
 				r.report(fmt.Errorf("escribir MKV: %w", err))
-				_ = current.abort()
+				_ = current.preservePartial()
 				current = nil
 			}
 		}
 	}
+}
+
+func (r *Recorder) currentDuration() time.Duration {
+	if r.SegmentDurationProvider != nil {
+		if value := r.SegmentDurationProvider(); value > 0 {
+			return value
+		}
+	}
+	return r.SegmentDuration
 }
 
 func ready(info stream.Info) bool {
@@ -100,18 +173,33 @@ func ready(info stream.Info) bool {
 	return false
 }
 
-func (r *Recorder) start(info stream.Info) (*segment, error) {
+func (r *Recorder) start(info stream.Info, generation uint64) (*segment, error) {
 	now := time.Now()
 	dir := filepath.Join(r.BaseDir, safePart(r.CameraID), now.Format("2006"), now.Format("01"), now.Format("02"))
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("crear directorio de grabación: %w", err)
 	}
-	name := now.Format("15-04-05.000")
-	partial := filepath.Join(dir, name+".mkv.partial")
-	final := filepath.Join(dir, name+".mkv")
-	file, err := os.OpenFile(partial, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o640)
-	if err != nil {
-		return nil, fmt.Errorf("crear grabación: %w", err)
+	baseName := now.Format("15-04-05.000")
+	var partial, final string
+	var file *os.File
+	var err error
+	for attempt := 0; attempt < 100; attempt++ {
+		name := baseName
+		if attempt > 0 {
+			name = fmt.Sprintf("%s-%02d", baseName, attempt)
+		}
+		partial = filepath.Join(dir, name+".mkv.partial")
+		final = filepath.Join(dir, name+".mkv")
+		file, err = os.OpenFile(partial, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o640)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return nil, fmt.Errorf("crear grabación: %w", err)
+		}
+	}
+	if file == nil {
+		return nil, errors.New("no se pudo generar un nombre único para la grabación")
 	}
 	writer, err := matroska.New(file, info)
 	if err != nil {
@@ -119,11 +207,14 @@ func (r *Recorder) start(info stream.Info) (*segment, error) {
 		_ = os.Remove(partial)
 		return nil, err
 	}
-	seg := &segment{partialPath: partial, finalPath: final, file: file, writer: writer, startedAt: now}
-	if r.OnStarted != nil {
-		r.OnStarted(partial, now)
-	}
-	return seg, nil
+	return &segment{
+		partialPath: partial,
+		finalPath:   final,
+		file:        file,
+		writer:      writer,
+		startedAt:   now,
+		generation:  generation,
+	}, nil
 }
 
 func (r *Recorder) completed(seg *segment) {
@@ -151,7 +242,19 @@ type segment struct {
 	writer      *matroska.Writer
 	startedAt   time.Time
 	endedAt     time.Time
+	generation  uint64
+	announced   bool
 	finished    bool
+}
+
+func (s *segment) announce(callback func(string, time.Time)) {
+	if s == nil || s.announced {
+		return
+	}
+	s.announced = true
+	if callback != nil {
+		callback(s.partialPath, s.startedAt)
+	}
 }
 
 func (s *segment) finish(ended time.Time) error {
@@ -181,9 +284,21 @@ func (s *segment) finish(ended time.Time) error {
 	return nil
 }
 
-func (s *segment) abort() error {
+func (s *segment) discard() error {
+	if s == nil {
+		return nil
+	}
 	_ = s.file.Close()
 	return os.Remove(s.partialPath)
+}
+
+func (s *segment) preservePartial() error {
+	if s == nil {
+		return nil
+	}
+	_ = s.writer.Close()
+	_ = s.file.Sync()
+	return s.file.Close()
 }
 
 func safePart(value string) string {

@@ -7,57 +7,64 @@ import (
 	"time"
 )
 
+const (
+	MinSegmentDurationSeconds int64 = 60
+	MaxSegmentDurationSeconds int64 = 24 * 60 * 60
+)
+
 type Camera struct {
-	ID               string    `json:"id"`
-	Name             string    `json:"name"`
-	Host             string    `json:"host"`
-	Username         string    `json:"username,omitempty"`
-	Password         string    `json:"password,omitempty"`
-	RTSPURL          string    `json:"rtsp_url"`
-	LiveRTSPURL      string    `json:"live_rtsp_url,omitempty"`
-	ProfileToken     string    `json:"profile_token,omitempty"`
-	LiveProfileToken string    `json:"live_profile_token,omitempty"`
-	Manufacturer     string    `json:"manufacturer,omitempty"`
-	Model            string    `json:"model,omitempty"`
-	SerialNumber     string    `json:"serial_number,omitempty"`
-	FirmwareVersion  string    `json:"firmware_version,omitempty"`
-	Codec            string    `json:"codec,omitempty"`
-	Width            int       `json:"width,omitempty"`
-	Height           int       `json:"height,omitempty"`
-	LiveCodec        string    `json:"live_codec,omitempty"`
-	LiveWidth        int       `json:"live_width,omitempty"`
-	LiveHeight       int       `json:"live_height,omitempty"`
-	Enabled          bool      `json:"enabled"`
-	Record           bool      `json:"record"`
-	Upload           bool      `json:"upload"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID                     string    `json:"id"`
+	Name                   string    `json:"name"`
+	Host                   string    `json:"host"`
+	Username               string    `json:"username,omitempty"`
+	Password               string    `json:"password,omitempty"`
+	RTSPURL                string    `json:"rtsp_url"`
+	LiveRTSPURL            string    `json:"live_rtsp_url,omitempty"`
+	ProfileToken           string    `json:"profile_token,omitempty"`
+	LiveProfileToken       string    `json:"live_profile_token,omitempty"`
+	Manufacturer           string    `json:"manufacturer,omitempty"`
+	Model                  string    `json:"model,omitempty"`
+	SerialNumber           string    `json:"serial_number,omitempty"`
+	FirmwareVersion        string    `json:"firmware_version,omitempty"`
+	Codec                  string    `json:"codec,omitempty"`
+	Width                  int       `json:"width,omitempty"`
+	Height                 int       `json:"height,omitempty"`
+	LiveCodec              string    `json:"live_codec,omitempty"`
+	LiveWidth              int       `json:"live_width,omitempty"`
+	LiveHeight             int       `json:"live_height,omitempty"`
+	Enabled                bool      `json:"enabled"`
+	Record                 bool      `json:"record"`
+	SegmentDurationSeconds int64     `json:"segment_duration_seconds"`
+	Upload                 bool      `json:"upload"`
+	CreatedAt              time.Time `json:"created_at"`
+	UpdatedAt              time.Time `json:"updated_at"`
 }
 
 type CameraPublic struct {
-	ID               string    `json:"id"`
-	Name             string    `json:"name"`
-	Host             string    `json:"host"`
-	Username         string    `json:"username,omitempty"`
-	RTSPURL          string    `json:"rtsp_url"`
-	LiveRTSPURL      string    `json:"live_rtsp_url,omitempty"`
-	ProfileToken     string    `json:"profile_token,omitempty"`
-	LiveProfileToken string    `json:"live_profile_token,omitempty"`
-	Manufacturer     string    `json:"manufacturer,omitempty"`
-	Model            string    `json:"model,omitempty"`
-	SerialNumber     string    `json:"serial_number,omitempty"`
-	FirmwareVersion  string    `json:"firmware_version,omitempty"`
-	Codec            string    `json:"codec,omitempty"`
-	Width            int       `json:"width,omitempty"`
-	Height           int       `json:"height,omitempty"`
-	LiveCodec        string    `json:"live_codec,omitempty"`
-	LiveWidth        int       `json:"live_width,omitempty"`
-	LiveHeight       int       `json:"live_height,omitempty"`
-	Enabled          bool      `json:"enabled"`
-	Record           bool      `json:"record"`
-	Upload           bool      `json:"upload"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID                     string    `json:"id"`
+	Name                   string    `json:"name"`
+	Host                   string    `json:"host"`
+	Username               string    `json:"username,omitempty"`
+	RTSPURL                string    `json:"rtsp_url"`
+	LiveRTSPURL            string    `json:"live_rtsp_url,omitempty"`
+	ProfileToken           string    `json:"profile_token,omitempty"`
+	LiveProfileToken       string    `json:"live_profile_token,omitempty"`
+	Manufacturer           string    `json:"manufacturer,omitempty"`
+	Model                  string    `json:"model,omitempty"`
+	SerialNumber           string    `json:"serial_number,omitempty"`
+	FirmwareVersion        string    `json:"firmware_version,omitempty"`
+	Codec                  string    `json:"codec,omitempty"`
+	Width                  int       `json:"width,omitempty"`
+	Height                 int       `json:"height,omitempty"`
+	LiveCodec              string    `json:"live_codec,omitempty"`
+	LiveWidth              int       `json:"live_width,omitempty"`
+	LiveHeight             int       `json:"live_height,omitempty"`
+	Enabled                bool      `json:"enabled"`
+	Record                 bool      `json:"record"`
+	SegmentDurationSeconds int64     `json:"segment_duration_seconds"`
+	Upload                 bool      `json:"upload"`
+	CreatedAt              time.Time `json:"created_at"`
+	UpdatedAt              time.Time `json:"updated_at"`
 }
 
 func (c Camera) Public() CameraPublic {
@@ -66,7 +73,7 @@ func (c Camera) Public() CameraPublic {
 		ProfileToken: c.ProfileToken, LiveProfileToken: c.LiveProfileToken, Manufacturer: c.Manufacturer, Model: c.Model,
 		SerialNumber: c.SerialNumber, FirmwareVersion: c.FirmwareVersion, Codec: c.Codec, Width: c.Width, Height: c.Height,
 		LiveCodec: c.LiveCodec, LiveWidth: c.LiveWidth, LiveHeight: c.LiveHeight,
-		Enabled: c.Enabled, Record: c.Record, Upload: c.Upload,
+		Enabled: c.Enabled, Record: c.Record, SegmentDurationSeconds: c.SegmentDurationSeconds, Upload: c.Upload,
 		CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
 	}
 }

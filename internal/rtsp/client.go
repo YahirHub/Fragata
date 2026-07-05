@@ -219,6 +219,8 @@ func (s *Source) runH264(ctx context.Context, c *gortsplib.Client, baseURL *base
 	if _, err := c.Setup(baseURL, media, 0, 0); err != nil {
 		return fmt.Errorf("SETUP RTSP: %w", err)
 	}
+	generation := s.Hub.BeginSource()
+	defer s.Hub.EndSource(generation)
 	sps, pps := forma.SafeParams()
 	width, height := sourceDimensions("H264", s.Width, s.Height, sps)
 	s.Hub.SetInfo(stream.Info{Codec: "H264", Width: width, Height: height, SPS: sps, PPS: pps})
@@ -264,7 +266,7 @@ func (s *Source) runH264(ctx context.Context, c *gortsplib.Client, baseURL *base
 			width, height = sourceDimensions("H264", s.Width, s.Height, sps)
 			s.Hub.SetInfo(stream.Info{Codec: "H264", Width: width, Height: height, SPS: sps, PPS: pps})
 		}
-		s.Hub.PublishAccessUnit(stream.AccessUnit{PTS: rtpTimestampDuration(pts, forma.ClockRate()), NALUs: au, KeyFrame: key})
+		s.Hub.PublishAccessUnit(stream.AccessUnit{PTS: rtpTimestampDuration(pts, forma.ClockRate()), NALUs: au, KeyFrame: key, Generation: generation})
 	})
 	return playUntilDone(ctx, c)
 }
@@ -277,6 +279,8 @@ func (s *Source) runH265(ctx context.Context, c *gortsplib.Client, baseURL *base
 	if _, err := c.Setup(baseURL, media, 0, 0); err != nil {
 		return fmt.Errorf("SETUP RTSP: %w", err)
 	}
+	generation := s.Hub.BeginSource()
+	defer s.Hub.EndSource(generation)
 	vps, sps, pps := forma.SafeParams()
 	width, height := sourceDimensions("H265", s.Width, s.Height, sps)
 	s.Hub.SetInfo(stream.Info{Codec: "H265", Width: width, Height: height, VPS: vps, SPS: sps, PPS: pps})
@@ -328,7 +332,7 @@ func (s *Source) runH265(ctx context.Context, c *gortsplib.Client, baseURL *base
 			width, height = sourceDimensions("H265", s.Width, s.Height, sps)
 			s.Hub.SetInfo(stream.Info{Codec: "H265", Width: width, Height: height, VPS: vps, SPS: sps, PPS: pps})
 		}
-		s.Hub.PublishAccessUnit(stream.AccessUnit{PTS: rtpTimestampDuration(pts, forma.ClockRate()), NALUs: au, KeyFrame: key})
+		s.Hub.PublishAccessUnit(stream.AccessUnit{PTS: rtpTimestampDuration(pts, forma.ClockRate()), NALUs: au, KeyFrame: key, Generation: generation})
 	})
 	return playUntilDone(ctx, c)
 }

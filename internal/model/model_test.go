@@ -37,3 +37,10 @@ func TestCameraPublicRedactsBothStreams(t *testing.T) {
 		t.Fatalf("camera credentials leaked: %#v", public)
 	}
 }
+
+func TestCameraPublicIncludesSegmentDuration(t *testing.T) {
+	camera := Camera{SegmentDurationSeconds: 3600}
+	if got := camera.Public().SegmentDurationSeconds; got != 3600 {
+		t.Fatalf("unexpected segment duration: %d", got)
+	}
+}

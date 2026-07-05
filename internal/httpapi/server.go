@@ -163,7 +163,8 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) {
 	sess, _ := s.auth.Session(r)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"auth_enabled": s.auth.Enabled(), "csrf_token": sess.CSRFToken, "username": s.cfg.AdminUser,
-		"ffmpeg_available": s.cfg.FFmpegPath != "",
+		"ffmpeg_available":                 s.cfg.FFmpegPath != "",
+		"default_segment_duration_seconds": int64(s.cfg.SegmentDuration / time.Second),
 	})
 }
 
@@ -209,20 +210,27 @@ func (s *Server) updateCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		Record *bool `json:"record"`
+		Record                 *bool  `json:"record"`
+		SegmentDurationSeconds *int64 `json:"segment_duration_seconds"`
 	}
 	if err := decodeJSON(w, r, &request); err != nil {
 		return
 	}
-	if request.Record == nil {
-		writeError(w, http.StatusBadRequest, "indique el estado de grabación")
+	if request.Record == nil && request.SegmentDurationSeconds == nil {
+		writeError(w, http.StatusBadRequest, "indique un ajuste de grabación")
 		return
 	}
 	id := strings.TrimSpace(r.PathValue("id"))
-	cam, err := s.cameras.UpdateRecording(id, *request.Record)
+	cam, err := s.cameras.UpdateSettings(id, camera.CameraSettings{
+		Record: request.Record, SegmentDurationSeconds: request.SegmentDurationSeconds,
+	})
 	if err != nil {
 		if strings.Contains(err.Error(), "no encontrada") {
 			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if strings.Contains(err.Error(), "duración") || strings.Contains(err.Error(), "minutos completos") {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "no se pudo actualizar la cámara")
@@ -449,7 +457,7 @@ func securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' https://cdn.jsdelivr.net; font-src 'self' https://cdn.jsdelivr.net data:; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
 		next.ServeHTTP(w, r)
 	})
 }

@@ -3,6 +3,7 @@ let camera = null;
 let peer = null;
 const cameraID = decodeURIComponent(location.pathname.split('/').filter(Boolean).at(-1) || '');
 const q = (selector) => document.querySelector(selector);
+const notify = (message, type = 'primary') => window.FragataUI?.toast(message, type);
 
 async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
@@ -20,13 +21,17 @@ async function api(path, options = {}) {
 
 async function init() {
   session = await api('/api/session');
+  q('fragata-app-layout')?.setSession(session);
+  q('#ffmpegBadge')?.classList.toggle('hidden', !session.ffmpeg_available);
   camera = await api(`/api/cameras/${encodeURIComponent(cameraID)}`);
   document.title = `${camera.name} · Fragata`;
   q('#cameraName').textContent = camera.name;
   q('#cameraSubtitle').textContent = `${camera.host} · ${camera.manufacturer || ''} ${camera.model || ''}`.trim();
+  q('fragata-app-layout')?.setSubtitle(`${camera.name} · ${camera.host}`);
   q('#primaryInfo').textContent = `${camera.codec || '—'} · ${camera.width && camera.height ? `${camera.width}×${camera.height}` : 'resolución pendiente'}`;
   q('#recordToggle').checked = camera.record;
-  await refreshStatus();
+  q('#segmentDurationPicker').valueSeconds = camera.segment_duration_seconds || session.default_segment_duration_seconds || 300;
+  await Promise.all([refreshStatus(), refreshUploads()]);
   await startLive();
   setInterval(refreshStatus, 3000);
 }
@@ -35,10 +40,16 @@ async function refreshStatus() {
   const statuses = await api('/api/status');
   const status = statuses.find((item) => item.camera_id === cameraID) || { state: 'starting' };
   const state = q('#viewerState');
-  state.textContent = translateState(status.state);
-  state.className = `state ${status.state || ''}`;
+  state.className = `camera-status ${status.state || 'starting'}`;
+  state.innerHTML = `<span class="status-dot"></span>${translateState(status.state)}`;
   q('#recordingState').textContent = status.recording_path ? 'Grabando ahora' : (camera.record ? 'Esperando video o fotograma clave' : 'Apagada');
   if (status.live_mode) q('#liveMode').textContent = liveModeLabel(status.live_mode);
+}
+
+async function refreshUploads() {
+  const jobs = await api('/api/uploads');
+  const badge = q('#queueBadge');
+  if (badge) badge.innerHTML = `<i class="bi bi-cloud-arrow-up me-1"></i>${jobs.length} subida${jobs.length === 1 ? '' : 's'}`;
 }
 
 function translateState(value) {
@@ -123,7 +134,7 @@ q('#fullscreenButton').addEventListener('click', async () => {
       throw new Error('Este navegador no permite pantalla completa desde la página.');
     }
   } catch (error) {
-    alert(error.message);
+    notify(error.message, 'danger');
   }
 });
 q('#recordToggle').addEventListener('change', async (event) => {
@@ -136,13 +147,34 @@ q('#recordToggle').addEventListener('change', async (event) => {
       body: JSON.stringify({ record: toggle.checked }),
     });
     q('#recordingState').textContent = camera.record ? 'Activándose…' : 'Apagada';
-    await startLive();
   } catch (error) {
     toggle.checked = previous;
-    alert(error.message);
+    notify(error.message, 'danger');
   } finally {
     toggle.disabled = false;
   }
+});
+
+q('#segmentDurationPicker').addEventListener('durationchange', async (event) => {
+  const picker = event.currentTarget;
+  const previous = camera.segment_duration_seconds;
+  picker.disabled = true;
+  try {
+    camera = await api(`/api/cameras/${encodeURIComponent(cameraID)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ segment_duration_seconds: event.detail.seconds }),
+    });
+    picker.valueSeconds = camera.segment_duration_seconds;
+  } catch (error) {
+    picker.valueSeconds = previous;
+    notify(error.message, 'danger');
+  } finally {
+    picker.disabled = false;
+  }
+});
+q('fragata-app-layout')?.addEventListener('fragata-logout', async () => {
+  await api('/api/logout', { method: 'POST', body: '{}' });
+  location.href = '/login';
 });
 window.addEventListener('beforeunload', stopLive);
 init().catch((error) => {

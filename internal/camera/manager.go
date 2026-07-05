@@ -40,7 +40,13 @@ func NewManager(cfg config.Config, state *store.Store, uploader *upload.Uploader
 }
 
 func (m *Manager) Start() {
-	for _, cam := range m.store.Cameras() {
+	for _, stored := range m.store.Cameras() {
+		cam := m.normalizeCamera(stored)
+		if cam.SegmentDurationSeconds != stored.SegmentDurationSeconds {
+			if err := m.store.SaveCamera(cam); err != nil {
+				m.logger.Warn("could not persist default segment duration", "camera_id", cam.ID, "error", err)
+			}
+		}
 		if cam.Enabled {
 			m.startWorker(cam)
 		}
@@ -62,6 +68,7 @@ func (m *Manager) Close() {
 }
 
 func (m *Manager) Add(cam model.Camera) (model.Camera, error) {
+	cam = m.normalizeCamera(cam)
 	id, err := randomID()
 	if err != nil {
 		return model.Camera{}, err
@@ -104,28 +111,66 @@ func (m *Manager) Cameras() []model.CameraPublic {
 	cameras := m.store.Cameras()
 	out := make([]model.CameraPublic, 0, len(cameras))
 	for _, cam := range cameras {
-		out = append(out, cam.Public())
+		out = append(out, m.normalizeCamera(cam).Public())
 	}
 	return out
 }
 
-func (m *Manager) Camera(id string) (model.Camera, bool) { return m.store.Camera(id) }
+func (m *Manager) Camera(id string) (model.Camera, bool) {
+	cam, ok := m.store.Camera(id)
+	if !ok {
+		return model.Camera{}, false
+	}
+	return m.normalizeCamera(cam), true
+}
 
-func (m *Manager) UpdateRecording(id string, enabled bool) (model.Camera, error) {
+type CameraSettings struct {
+	Record                 *bool
+	SegmentDurationSeconds *int64
+}
+
+func (m *Manager) UpdateSettings(id string, settings CameraSettings) (model.Camera, error) {
 	cam, exists := m.store.Camera(id)
 	if !exists {
 		return model.Camera{}, errors.New("cámara no encontrada")
 	}
-	if cam.Record == enabled {
+	cam = m.normalizeCamera(cam)
+	changed := false
+	if settings.Record != nil && cam.Record != *settings.Record {
+		cam.Record = *settings.Record
+		changed = true
+	}
+	if settings.SegmentDurationSeconds != nil {
+		seconds := *settings.SegmentDurationSeconds
+		if seconds < model.MinSegmentDurationSeconds || seconds > model.MaxSegmentDurationSeconds {
+			return model.Camera{}, fmt.Errorf("la duración por archivo debe estar entre %d minuto y %d horas", model.MinSegmentDurationSeconds/60, model.MaxSegmentDurationSeconds/3600)
+		}
+		if seconds%60 != 0 {
+			return model.Camera{}, errors.New("la duración por archivo debe configurarse en minutos completos")
+		}
+		if cam.SegmentDurationSeconds != seconds {
+			cam.SegmentDurationSeconds = seconds
+			changed = true
+		}
+	}
+	if !changed {
 		return cam, nil
 	}
-	cam.Record = enabled
 	cam.UpdatedAt = time.Now().UTC()
 	if err := m.store.SaveCamera(cam); err != nil {
 		return model.Camera{}, err
 	}
-	m.restartWorker(cam)
+	m.mu.RLock()
+	w := m.workers[id]
+	m.mu.RUnlock()
+	if w != nil {
+		w.configureRecording(cam.Record, time.Duration(cam.SegmentDurationSeconds)*time.Second)
+	}
 	return cam, nil
+}
+
+func (m *Manager) UpdateRecording(id string, enabled bool) (model.Camera, error) {
+	return m.UpdateSettings(id, CameraSettings{Record: &enabled})
 }
 
 func (m *Manager) Redetect(ctx context.Context, id string) (DetectionResult, error) {
@@ -133,7 +178,9 @@ func (m *Manager) Redetect(ctx context.Context, id string) (DetectionResult, err
 	if !exists {
 		return DetectionResult{}, errors.New("cámara no encontrada")
 	}
+	current = m.normalizeCamera(current)
 	enabled, record, upload := current.Enabled, current.Record, current.Upload
+	segmentDurationSeconds := current.SegmentDurationSeconds
 	detected, err := Detect(ctx, m.cfg, AddRequest{
 		Name: current.Name, Host: current.Host, Username: current.Username, Password: current.Password,
 		Enabled: &enabled, Record: &record, Upload: &upload,
@@ -144,6 +191,7 @@ func (m *Manager) Redetect(ctx context.Context, id string) (DetectionResult, err
 	updated := detected.Camera
 	updated.ID = current.ID
 	updated.CreatedAt = current.CreatedAt
+	updated.SegmentDurationSeconds = segmentDurationSeconds
 	updated.UpdatedAt = time.Now().UTC()
 	if err := m.store.SaveCamera(updated); err != nil {
 		return DetectionResult{}, err
@@ -194,7 +242,9 @@ func (m *Manager) startWorker(cam model.Camera) {
 		return
 	}
 	ctx, cancel := context.WithCancel(m.ctx)
+	cam = m.normalizeCamera(cam)
 	w := &worker{cam: cam, cfg: m.cfg, uploader: m.uploader, logger: m.logger, hub: stream.NewHub(), ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	w.segmentDuration.Store(int64(time.Duration(cam.SegmentDurationSeconds) * time.Second))
 	w.status = model.RuntimeStatus{CameraID: cam.ID, State: "starting", Codec: cam.Codec}
 	m.workers[cam.ID] = w
 	m.mu.Unlock()
@@ -214,6 +264,17 @@ func (m *Manager) restartWorker(cam model.Camera) {
 	}
 }
 
+func (m *Manager) normalizeCamera(cam model.Camera) model.Camera {
+	if cam.SegmentDurationSeconds < model.MinSegmentDurationSeconds || cam.SegmentDurationSeconds > model.MaxSegmentDurationSeconds {
+		seconds := int64(m.cfg.SegmentDuration / time.Second)
+		if seconds < model.MinSegmentDurationSeconds || seconds > model.MaxSegmentDurationSeconds {
+			seconds = 5 * 60
+		}
+		cam.SegmentDurationSeconds = seconds
+	}
+	return cam
+}
+
 type worker struct {
 	cam             model.Camera
 	cfg             config.Config
@@ -225,6 +286,10 @@ type worker struct {
 	done            chan struct{}
 	mu              sync.RWMutex
 	status          model.RuntimeStatus
+	recordingMu     sync.Mutex
+	recordingCancel context.CancelFunc
+	recordingDone   chan struct{}
+	segmentDuration atomic.Int64
 	liveMu          sync.Mutex
 	liveHub         *stream.Hub
 	liveCancel      context.CancelFunc
@@ -237,45 +302,12 @@ type worker struct {
 
 func (w *worker) run() {
 	defer close(w.done)
-	defer w.stopLive()
 	defer w.hub.Close()
-	recorderDone := make(chan struct{})
+	defer w.stopRecorder()
+	defer w.stopLive()
 	if w.cam.Record {
-		go func() {
-			defer close(recorderDone)
-			recorder := recording.Recorder{
-				CameraID: w.cam.ID, BaseDir: w.cfg.RecordingsDir, SegmentDuration: w.cfg.SegmentDuration, Hub: w.hub,
-				OnStarted: func(recordingPath string, started time.Time) {
-					relative, err := filepath.Rel(w.cfg.RecordingsDir, recordingPath)
-					if err != nil {
-						relative = filepath.Base(recordingPath)
-					}
-					w.update(func(s *model.RuntimeStatus) {
-						s.RecordingPath = filepath.ToSlash(relative)
-						s.RecordingStarted = started
-					})
-				},
-				OnCompleted: func(file recording.CompletedFile) {
-					w.update(func(s *model.RuntimeStatus) { s.RecordingPath = ""; s.RecordingStarted = time.Time{} })
-					if w.cam.Upload && w.uploader != nil && w.uploader.Enabled() {
-						relative, err := filepath.Rel(w.cfg.RecordingsDir, file.Path)
-						if err == nil {
-							if err := w.uploader.Enqueue(w.cam.ID, file.Path, relative); err != nil {
-								w.setError(err)
-							}
-						}
-					}
-				},
-				OnError: w.setError,
-			}
-			if err := recorder.Run(w.ctx); err != nil && !errors.Is(err, context.Canceled) {
-				w.setError(err)
-			}
-		}()
-	} else {
-		close(recorderDone)
+		w.startRecorder()
 	}
-	defer func() { <-recorderDone }()
 
 	backoff := 2 * time.Second
 	for w.ctx.Err() == nil {
@@ -327,6 +359,96 @@ func (w *worker) run() {
 			}
 		}
 	}
+}
+
+func (w *worker) configureRecording(enabled bool, duration time.Duration) {
+	if duration > 0 {
+		w.segmentDuration.Store(int64(duration))
+	}
+	if enabled {
+		w.startRecorder()
+		return
+	}
+	w.stopRecorder()
+}
+
+func (w *worker) startRecorder() {
+	w.recordingMu.Lock()
+	if w.recordingCancel != nil {
+		w.recordingMu.Unlock()
+		return
+	}
+	recorderCtx, cancel := context.WithCancel(w.ctx)
+	done := make(chan struct{})
+	w.recordingCancel = cancel
+	w.recordingDone = done
+	w.recordingMu.Unlock()
+
+	go func() {
+		defer close(done)
+		recorder := recording.Recorder{
+			CameraID: w.cam.ID, BaseDir: w.cfg.RecordingsDir, Hub: w.hub,
+			SegmentDurationProvider: func() time.Duration {
+				return time.Duration(w.segmentDuration.Load())
+			},
+			OnStarted: func(recordingPath string, started time.Time) {
+				relative, err := filepath.Rel(w.cfg.RecordingsDir, recordingPath)
+				if err != nil {
+					relative = filepath.Base(recordingPath)
+				}
+				w.update(func(status *model.RuntimeStatus) {
+					status.RecordingPath = filepath.ToSlash(relative)
+					status.RecordingStarted = started
+				})
+			},
+			OnCompleted: func(file recording.CompletedFile) {
+				w.update(func(status *model.RuntimeStatus) {
+					if status.RecordingStarted.Equal(file.StartedAt) {
+						status.RecordingPath = ""
+						status.RecordingStarted = time.Time{}
+					}
+				})
+				if w.cam.Upload && w.uploader != nil && w.uploader.Enabled() {
+					relative, err := filepath.Rel(w.cfg.RecordingsDir, file.Path)
+					if err == nil {
+						if err := w.uploader.Enqueue(w.cam.ID, file.Path, relative); err != nil {
+							w.setError(err)
+						}
+					}
+				}
+			},
+			OnError: w.setError,
+		}
+		if err := recorder.Run(recorderCtx); err != nil && !errors.Is(err, context.Canceled) {
+			w.setError(err)
+		}
+		w.recordingMu.Lock()
+		if w.recordingDone == done {
+			w.recordingCancel = nil
+			w.recordingDone = nil
+		}
+		w.recordingMu.Unlock()
+	}()
+}
+
+func (w *worker) stopRecorder() {
+	w.recordingMu.Lock()
+	cancel := w.recordingCancel
+	done := w.recordingDone
+	w.recordingMu.Unlock()
+	if cancel == nil {
+		return
+	}
+	cancel()
+	if done != nil {
+		<-done
+	}
+	w.recordingMu.Lock()
+	if w.recordingDone == done {
+		w.recordingCancel = nil
+		w.recordingDone = nil
+	}
+	w.recordingMu.Unlock()
 }
 
 func (w *worker) stop() {

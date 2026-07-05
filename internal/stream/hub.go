@@ -17,21 +17,31 @@ type Info struct {
 }
 
 type AccessUnit struct {
-	PTS      time.Duration
-	NALUs    [][]byte
-	KeyFrame bool
+	PTS           time.Duration
+	NALUs         [][]byte
+	KeyFrame      bool
+	Generation    uint64
+	Discontinuity bool
+}
+
+type accessUnitSubscription struct {
+	channel  chan AccessUnit
+	reliable bool
+	done     chan struct{}
+	once     sync.Once
 }
 
 type Hub struct {
-	mu      sync.RWMutex
-	info    Info
-	rtpSubs map[chan *rtp.Packet]struct{}
-	auSubs  map[chan AccessUnit]struct{}
-	closed  bool
+	mu         sync.RWMutex
+	info       Info
+	rtpSubs    map[chan *rtp.Packet]struct{}
+	auSubs     map[*accessUnitSubscription]struct{}
+	generation uint64
+	closed     bool
 }
 
 func NewHub() *Hub {
-	return &Hub{rtpSubs: make(map[chan *rtp.Packet]struct{}), auSubs: make(map[chan AccessUnit]struct{})}
+	return &Hub{rtpSubs: make(map[chan *rtp.Packet]struct{}), auSubs: make(map[*accessUnitSubscription]struct{})}
 }
 
 func (h *Hub) SetInfo(info Info) {
@@ -53,6 +63,27 @@ func (h *Hub) Info() Info {
 	return out
 }
 
+// BeginSource identifies a new RTSP session. Recorders use the generation to
+// close the previous file before timestamps restart after a reconnect.
+func (h *Hub) BeginSource() uint64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return 0
+	}
+	h.generation++
+	return h.generation
+}
+
+// EndSource informs subscribers that the current RTSP session ended. The
+// marker contains no video and is never written to a recording.
+func (h *Hub) EndSource(generation uint64) {
+	if generation == 0 {
+		return
+	}
+	h.PublishAccessUnit(AccessUnit{Generation: generation, Discontinuity: true})
+}
+
 func (h *Hub) PublishRTP(pkt *rtp.Packet) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -70,20 +101,45 @@ func (h *Hub) PublishRTP(pkt *rtp.Packet) {
 
 func (h *Hub) PublishAccessUnit(au AccessUnit) {
 	h.mu.RLock()
-	defer h.mu.RUnlock()
 	if h.closed {
+		h.mu.RUnlock()
 		return
 	}
-	for ch := range h.auSubs {
-		copyAU := AccessUnit{PTS: au.PTS, KeyFrame: au.KeyFrame, NALUs: make([][]byte, len(au.NALUs))}
-		for i := range au.NALUs {
-			copyAU.NALUs[i] = append([]byte(nil), au.NALUs[i]...)
+	subscriptions := make([]*accessUnitSubscription, 0, len(h.auSubs))
+	for subscription := range h.auSubs {
+		subscriptions = append(subscriptions, subscription)
+	}
+	h.mu.RUnlock()
+
+	for _, subscription := range subscriptions {
+		copyAU := cloneAccessUnit(au)
+		if subscription.reliable {
+			select {
+			case subscription.channel <- copyAU:
+			case <-subscription.done:
+			}
+			continue
 		}
 		select {
-		case ch <- copyAU:
+		case subscription.channel <- copyAU:
+		case <-subscription.done:
 		default:
 		}
 	}
+}
+
+func cloneAccessUnit(au AccessUnit) AccessUnit {
+	out := AccessUnit{
+		PTS:           au.PTS,
+		KeyFrame:      au.KeyFrame,
+		Generation:    au.Generation,
+		Discontinuity: au.Discontinuity,
+		NALUs:         make([][]byte, len(au.NALUs)),
+	}
+	for i := range au.NALUs {
+		out.NALUs[i] = append([]byte(nil), au.NALUs[i]...)
+	}
+	return out
 }
 
 func (h *Hub) SubscribeRTP(size int) (<-chan *rtp.Packet, func()) {
@@ -112,25 +168,34 @@ func (h *Hub) SubscribeRTP(size int) (<-chan *rtp.Packet, func()) {
 }
 
 func (h *Hub) SubscribeAccessUnits(size int) (<-chan AccessUnit, func()) {
+	return h.subscribeAccessUnits(size, false)
+}
+
+func (h *Hub) SubscribeAccessUnitsReliable(size int) (<-chan AccessUnit, func()) {
+	return h.subscribeAccessUnits(size, true)
+}
+
+func (h *Hub) subscribeAccessUnits(size int, reliable bool) (<-chan AccessUnit, func()) {
 	if size < 1 {
 		size = 64
 	}
-	ch := make(chan AccessUnit, size)
+	subscription := &accessUnitSubscription{
+		channel:  make(chan AccessUnit, size),
+		reliable: reliable,
+		done:     make(chan struct{}),
+	}
 	h.mu.Lock()
 	if h.closed {
-		close(ch)
+		close(subscription.done)
 	} else {
-		h.auSubs[ch] = struct{}{}
+		h.auSubs[subscription] = struct{}{}
 	}
 	h.mu.Unlock()
-	var once sync.Once
-	return ch, func() {
-		once.Do(func() {
+	return subscription.channel, func() {
+		subscription.once.Do(func() {
+			close(subscription.done)
 			h.mu.Lock()
-			if _, ok := h.auSubs[ch]; ok {
-				delete(h.auSubs, ch)
-				close(ch)
-			}
+			delete(h.auSubs, subscription)
 			h.mu.Unlock()
 		})
 	}
@@ -152,8 +217,8 @@ func (h *Hub) Close() {
 	for ch := range h.rtpSubs {
 		close(ch)
 	}
-	for ch := range h.auSubs {
-		close(ch)
+	for subscription := range h.auSubs {
+		subscription.once.Do(func() { close(subscription.done) })
 	}
 	h.rtpSubs = nil
 	h.auSubs = nil

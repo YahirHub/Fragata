@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"fragata/internal/model"
 )
 
 type Config struct {
@@ -109,8 +111,8 @@ func Load(dotenvPath string) (Config, error) {
 		cfg.AdminUser = ""
 		cfg.AdminPassword = ""
 	}
-	if cfg.SegmentDuration < 10*time.Second {
-		return Config{}, errors.New("FRAGATA_SEGMENT_DURATION debe ser al menos 10s")
+	if cfg.SegmentDuration < time.Duration(model.MinSegmentDurationSeconds)*time.Second || cfg.SegmentDuration > time.Duration(model.MaxSegmentDurationSeconds)*time.Second {
+		return Config{}, fmt.Errorf("FRAGATA_SEGMENT_DURATION debe estar entre %dm y %dh", model.MinSegmentDurationSeconds/60, model.MaxSegmentDurationSeconds/3600)
 	}
 	if cfg.MaxViewers < 1 || cfg.MaxViewers > 256 {
 		return Config{}, errors.New("FRAGATA_MAX_VIEWERS debe estar entre 1 y 256")
