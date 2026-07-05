@@ -394,3 +394,53 @@ fragata-app-layout:not([data-ready="true"]), fragata-auth-layout:not([data-ready
   .camera-table td:last-child { position: sticky; right: 0; z-index: 2; background: #fff; box-shadow: -8px 0 12px rgba(31,45,79,.035); }
   .camera-table thead th:last-child { z-index: 3; background: #f8f9fc; }
 }
+
+/* Visor de cámara: el video siempre conserva su relación de aspecto y los
+   controles permanecen debajo para evitar recortes en escritorio y móvil. */
+.viewer-heading { margin-bottom: 1rem; }
+.viewer-card { overflow: hidden; }
+.viewer-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: var(--viewer-aspect, 16 / 9);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: #03050a;
+}
+.viewer-stage video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  background: #000;
+}
+.viewer-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  border-top: 1px solid var(--fragata-border);
+  background: #fff;
+}
+.viewer-status-group { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem 1rem; }
+.viewer-option-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 1.5rem; }
+.viewer-stage:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  max-height: none;
+  aspect-ratio: auto;
+  background: #000;
+}
+.viewer-stage:fullscreen video { width: 100vw; height: 100vh; object-fit: contain; }
+.viewer-stage:fullscreen .viewer-overlay { position: fixed; }
+
+@media (max-width: 767.98px) {
+  .viewer-controls { align-items: stretch; flex-direction: column; padding: .875rem; }
+  .viewer-controls .d-flex { width: 100%; }
+  .viewer-controls .btn { flex: 1 1 auto; }
+  .viewer-option-row { align-items: stretch; flex-direction: column; }
+  .viewer-option-row .form-switch { align-self: flex-start; }
+}

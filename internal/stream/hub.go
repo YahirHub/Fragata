@@ -37,6 +37,7 @@ type Hub struct {
 	rtpSubs    map[chan *rtp.Packet]struct{}
 	auSubs     map[*accessUnitSubscription]struct{}
 	generation uint64
+	viewers    int
 	closed     bool
 }
 
@@ -201,10 +202,30 @@ func (h *Hub) subscribeAccessUnits(size int, reliable bool) (<-chan AccessUnit, 
 	}
 }
 
+func (h *Hub) AcquireViewer() func() {
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return func() {}
+	}
+	h.viewers++
+	h.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			h.mu.Lock()
+			if h.viewers > 0 {
+				h.viewers--
+			}
+			h.mu.Unlock()
+		})
+	}
+}
+
 func (h *Hub) ViewerCount() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	return len(h.rtpSubs)
+	return len(h.rtpSubs) + h.viewers
 }
 
 func (h *Hub) Close() {

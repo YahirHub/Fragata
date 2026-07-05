@@ -488,7 +488,7 @@ func (s *Server) offer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, model.RedactSecrets(err.Error()))
 		return
 	}
-	answer, err := s.live.Offer(ctx, hub, request.SDP)
+	answer, err := s.live.Offer(ctx, hub, request.SDP, mode)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, model.RedactSecrets(err.Error()))
 		return

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.1 - 2026-07-05
+
+- Corrige el visor WebRTC que podía conectarse sin mostrar imagen y quedar completamente negro.
+- Reconstruye el video H.264 desde access units completas en lugar de reenviar RTP de cámara sin normalizar.
+- Espera un fotograma clave antes de iniciar cada visor e inyecta SPS/PPS en el arranque y tras reconexiones.
+- Publica el perfil H.264 obtenido del SPS para evitar discrepancias de codec entre cámara y navegador.
+- Usa FFmpeg automáticamente para normalizar H.264 Main/High Profile cuando está disponible, además de H.265.
+- Prioriza H.264 en la negociación del navegador y no oculta el estado de carga hasta reproducir un fotograma real.
+- Añade diagnóstico visual cuando existe conexión WebRTC pero todavía no llega video decodificable.
+- Reorganiza la página con el video arriba y todas las acciones y opciones debajo.
+- Mantiene la relación de aspecto real, usa `object-fit: contain` y evita recortes en escritorio, móvil y pantalla completa.
+- Registra correctamente espectadores que consumen access units para conservar el apagado inteligente por inactividad.
+
 ## 0.6.0 - 2026-07-05
 
 - Separa el dashboard, listado de cámaras, alta y ajustes en páginas independientes.

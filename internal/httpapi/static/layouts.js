@@ -84,7 +84,7 @@
 
             <main class="app-content">${content}</main>
             <footer class="app-footer">
-              <span>Fragata <strong>v0.6.0</strong></span>
+              <span>Fragata <strong>v0.6.1</strong></span>
               <span>Servidor NVR ligero · Go</span>
             </footer>
           </div>
@@ -143,7 +143,7 @@
               <span><strong>Fragata</strong><small>Servidor de cámaras</small></span>
             </div>
             <div class="auth-card">${content}</div>
-            <footer class="auth-footer">Fragata v0.6.0 · Servidor NVR ligero</footer>
+            <footer class="auth-footer">Fragata v0.6.1 · Servidor NVR ligero</footer>
           </section>
         </main>
       `;

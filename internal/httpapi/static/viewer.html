@@ -11,25 +11,74 @@
 </head>
 <body>
   <fragata-app-layout page-title="Visor de cámara" page-icon="bi-camera-video" active="cameras">
-    <section class="page-heading">
-      <div>
-        <nav aria-label="breadcrumb"><ol class="breadcrumb small mb-2"><li class="breadcrumb-item"><a href="/">Dashboard</a></li><li class="breadcrumb-item"><a href="/cameras">Cámaras</a></li><li class="breadcrumb-item active" aria-current="page">Visor</li></ol></nav>
-        <h2 id="cameraName">Cargando cámara…</h2><p id="cameraSubtitle"></p>
+    <section class="viewer-heading">
+      <nav aria-label="breadcrumb">
+        <ol class="breadcrumb small mb-2">
+          <li class="breadcrumb-item"><a href="/">Dashboard</a></li>
+          <li class="breadcrumb-item"><a href="/cameras">Cámaras</a></li>
+          <li class="breadcrumb-item active" aria-current="page">Visor</li>
+        </ol>
+      </nav>
+      <h2 id="cameraName" class="mb-1">Cargando cámara…</h2>
+      <p id="cameraSubtitle" class="text-body-secondary mb-0"></p>
+    </section>
+
+    <section class="card dashboard-card viewer-card mb-4">
+      <div id="viewerStage" class="viewer-stage" style="--viewer-aspect: 16 / 9">
+        <video id="viewerVideo" autoplay muted playsinline></video>
+        <div id="viewerOverlay" class="viewer-overlay" role="status" aria-live="polite">
+          <span id="viewerSpinner" class="spinner-border text-light mb-3" aria-hidden="true"></span>
+          <span id="viewerMessage">Preparando vista en vivo…</span>
+          <button id="viewerPlayButton" type="button" class="btn btn-light btn-sm mt-3 d-none">
+            <i class="bi bi-play-fill me-1"></i>Reproducir
+          </button>
+        </div>
       </div>
-      <div class="d-flex flex-column flex-sm-row gap-2"><a href="/cameras" class="btn btn-outline-secondary"><i class="bi bi-arrow-left me-2"></i>Volver</a><a id="cameraSettingsButton" href="/cameras" class="btn btn-outline-secondary"><i class="bi bi-sliders me-2"></i>Ajustes</a><button id="reconnectButton" class="btn btn-outline-primary"><i class="bi bi-arrow-repeat me-2"></i>Reconectar</button><button id="fullscreenButton" class="btn btn-primary"><i class="bi bi-arrows-fullscreen me-2"></i>Pantalla completa</button></div>
+      <div class="viewer-controls">
+        <div class="viewer-status-group">
+          <span id="viewerState" class="camera-status"><span class="status-dot"></span>iniciando</span>
+          <span class="text-body-secondary small"><i class="bi bi-volume-mute me-1"></i>Vista sin audio</span>
+        </div>
+        <div class="d-flex flex-wrap gap-2">
+          <a href="/cameras" class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-left me-2"></i>Volver</a>
+          <a id="cameraSettingsButton" href="/cameras" class="btn btn-outline-secondary btn-sm"><i class="bi bi-sliders me-2"></i>Ajustes</a>
+          <button id="reconnectButton" type="button" class="btn btn-outline-primary btn-sm"><i class="bi bi-arrow-repeat me-2"></i>Reconectar</button>
+          <button id="fullscreenButton" type="button" class="btn btn-primary btn-sm"><i class="bi bi-arrows-fullscreen me-2"></i>Pantalla completa</button>
+        </div>
+      </div>
     </section>
 
-    <section class="card dashboard-card overflow-hidden mb-4">
-      <div class="viewer-toolbar"><span id="viewerState" class="camera-status"><span class="status-dot"></span>iniciando</span><span class="text-body-secondary small"><i class="bi bi-volume-mute me-1"></i>Vista sin audio</span></div>
-      <div id="viewerStage" class="viewer-stage"><video id="viewerVideo" autoplay muted playsinline></video><div id="viewerOverlay" class="viewer-overlay"><span class="spinner-border text-light mb-3" aria-hidden="true"></span><span>Preparando vista en vivo…</span></div></div>
+    <section class="row g-3 g-xl-4 mb-4">
+      <div class="col-sm-6 col-xl-4"><article class="info-card h-100"><span class="info-icon text-primary"><i class="bi bi-badge-hd-fill"></i></span><div><small>Stream principal</small><strong id="primaryInfo">—</strong></div></article></div>
+      <div class="col-sm-6 col-xl-4"><article class="info-card h-100"><span class="info-icon text-info"><i class="bi bi-broadcast"></i></span><div><small>Modo de visualización</small><strong id="liveMode">—</strong></div></article></div>
+      <div class="col-sm-6 col-xl-4"><article class="info-card h-100"><span class="info-icon text-danger"><i class="bi bi-record-circle"></i></span><div><small>Estado de grabación</small><strong id="recordingState">—</strong></div></article></div>
     </section>
 
-    <section class="row g-3 g-xl-4">
-      <div class="col-sm-6 col-xl-3"><article class="info-card"><span class="info-icon text-primary"><i class="bi bi-badge-hd-fill"></i></span><div><small>Stream principal</small><strong id="primaryInfo">—</strong></div></article></div>
-      <div class="col-sm-6 col-xl-3"><article class="info-card"><span class="info-icon text-info"><i class="bi bi-broadcast"></i></span><div><small>Modo de visualización</small><strong id="liveMode">—</strong></div></article></div>
-      <div class="col-sm-6 col-xl-3"><article class="info-card"><span class="info-icon text-danger"><i class="bi bi-record-circle"></i></span><div><small>Estado de grabación</small><strong id="recordingState">—</strong></div></article></div>
-      <div class="col-sm-6 col-xl-3"><article class="info-card info-card-control"><div><small>Grabar en MKV</small><strong>Activar o detener</strong></div><div class="form-check form-switch form-switch-lg m-0"><input id="recordToggle" class="form-check-input" type="checkbox" role="switch" aria-label="Activar grabación"></div></article></div>
-      <div class="col-12"><article class="card dashboard-card"><div class="card-body d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3"><div><span class="section-kicker">Grabación</span><h3 class="h6 mb-1">Duración por archivo</h3><p class="text-body-secondary mb-0">La rotación se aplica sin desconectar la cámara.</p></div><fragata-duration-picker id="segmentDurationPicker" value-seconds="300"></fragata-duration-picker></div></article></div>
+    <section class="card dashboard-card mb-4">
+      <div class="card-header bg-transparent border-0 px-4 pt-4 pb-0">
+        <span class="section-kicker">Opciones de cámara</span>
+        <h3 class="h5 mb-1">Grabación</h3>
+        <p class="text-body-secondary mb-0">Los cambios se guardan para esta cámara.</p>
+      </div>
+      <div class="card-body p-4">
+        <div class="viewer-option-row">
+          <div>
+            <h4 class="h6 mb-1">Grabar en MKV</h4>
+            <p class="text-body-secondary small mb-0">Activa o detén la grabación sin cerrar la vista en vivo.</p>
+          </div>
+          <div class="form-check form-switch form-switch-lg m-0">
+            <input id="recordToggle" class="form-check-input" type="checkbox" role="switch" aria-label="Activar grabación">
+          </div>
+        </div>
+        <hr class="my-4">
+        <div class="viewer-option-row align-items-md-center">
+          <div>
+            <h4 class="h6 mb-1">Duración por archivo</h4>
+            <p class="text-body-secondary small mb-0">La siguiente rotación se aplica sin desconectar la cámara.</p>
+          </div>
+          <fragata-duration-picker id="segmentDurationPicker" value-seconds="300"></fragata-duration-picker>
+        </div>
+      </div>
     </section>
   </fragata-app-layout>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
