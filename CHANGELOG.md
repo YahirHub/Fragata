@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.7.1 - 2026-07-05
+
+- Separa video y audio en sesiones WebRTC independientes para que un fallo de sonido no bloquee la imagen.
+- Restaura el proceso FFmpeg de video aislado y mueve la conversión AAC a un proceso auxiliar independiente.
+- Mantiene el visor en `Conectando` únicamente hasta confirmar un fotograma de video decodificado.
+- Evita que los reintentos de audio reinicien o destruyan una sesión de video saludable.
+- Reduce la consulta de estado a cada cinco segundos y la pausa cuando la pestaña está oculta.
+- Añade el tipo de medio a la oferta WebRTC para negociar video y audio de forma explícita.
+
+## 0.7.0 - 2026-07-05
+
+- Detecta audio RTSP G.711 A-law, G.711 μ-law, Opus y AAC junto con el stream de video.
+- Añade pista de audio al visor WebRTC con activación explícita desde la interfaz y conversión AAC a PCMU mediante FFmpeg cuando se necesita.
+- Guarda el audio compatible dentro del mismo MKV sin recomprimir y conserva la grabación de video cuando no existe audio compatible.
+- Agrega `logs.txt` rotativo con límite estricto de 1 MiB y eliminación de las líneas más antiguas.
+- Implementa perfiles SFTP globales reutilizables, múltiples servidores, prueba de conexión, credenciales cifradas y selección por cámara.
+- Conserva el perfil SFTP dentro de cada trabajo de la cola persistente para reintentar en el destino correcto.
+- Añade una página global de almacenamiento y una política de retención configurable por días, meses o años.
+- Ejecuta la retención al iniciar, al guardar la política y periódicamente, sin eliminar archivos parciales ni subidas pendientes.
+- Añade pruebas mínimas para rotación de logs, cifrado SFTP, pista de audio MKV, limpieza de metadatos y protección de grabaciones.
+
 ## 0.6.4 - 2026-07-05
 
 - Corrige la política CSP que bloqueaba estilos dinámicos requeridos por Bootstrap y el ajuste del visor.

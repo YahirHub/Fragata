@@ -28,14 +28,15 @@ func New(stunServers []string, maxPeers int) *Manager {
 	if maxPeers < 1 {
 		maxPeers = 1
 	}
+	// Cada visor puede usar una sesión para video y otra opcional para audio.
+	maxPeers *= 2
 	return &Manager{configuration: webrtc.Configuration{ICEServers: servers}, peers: make(map[*webrtc.PeerConnection]context.CancelFunc), maxPeers: maxPeers}
 }
 
-// Offer creates a browser WebRTC session. Native RTSP sources are rebuilt from
-// complete H.264 access units so the browser receives a clean stream beginning
-// on a keyframe with SPS/PPS. FFmpeg RTP is also rebuilt into access units, so
-// every viewer can start from the cached GOP instead of joining mid-frame.
-func (m *Manager) Offer(ctx context.Context, hub *stream.Hub, offerSDP, mode string) (string, error) {
+// OfferVideo creates an isolated video-only WebRTC session. Keeping audio in a
+// separate peer prevents a camera audio negotiation problem from blocking or
+// restarting a healthy video session.
+func (m *Manager) OfferVideo(ctx context.Context, hub *stream.Hub, offerSDP, mode string) (string, error) {
 	if hub == nil {
 		return "", errors.New("cámara no disponible")
 	}
@@ -47,16 +48,113 @@ func (m *Manager) Offer(ctx context.Context, hub *stream.Hub, offerSDP, mode str
 		return "", errors.New("la vista web requiere video H.264")
 	}
 
+	pc, peerCtx, connected, cleanup, err := m.newPeer()
+	if err != nil {
+		return "", err
+	}
+
+	capability := webrtc.RTPCodecCapability{
+		MimeType:    webrtc.MimeTypeH264,
+		ClockRate:   90000,
+		SDPFmtpLine: h264FMTP(info.SPS),
+	}
+	_ = mode // Se conserva para diagnóstico; todo video se normaliza a access units.
+	track, err := webrtc.NewTrackLocalStaticSample(capability, "video", "fragata-video")
+	if err != nil {
+		cleanup()
+		return "", err
+	}
+	sender, err := pc.AddTrack(track)
+	if err != nil {
+		cleanup()
+		return "", err
+	}
+	drainRTCP(sender)
+
+	go func() {
+		select {
+		case <-peerCtx.Done():
+			return
+		case <-connected:
+		}
+		releaseViewer := hub.AcquireViewer()
+		units, unsubscribe := hub.SubscribeAccessUnits(256)
+		defer unsubscribe()
+		defer releaseViewer()
+		relayAccessUnits(peerCtx, hub, track, units)
+	}()
+
+	return completeOffer(ctx, pc, cleanup, offerSDP)
+}
+
+// OfferAudio creates an audio-only WebRTC session. Failure here must never
+// affect the video peer; callers can retry audio silently in the background.
+func (m *Manager) OfferAudio(ctx context.Context, hub *stream.Hub, offerSDP string) (string, error) {
+	if hub == nil {
+		return "", errors.New("cámara no disponible")
+	}
+	audioInfo := hub.AudioInfo()
+	capability, ok := webRTCAudioCapability(audioInfo)
+	if !ok {
+		return "", errors.New("el audio todavía no está disponible para el navegador")
+	}
+
+	pc, peerCtx, connected, cleanup, err := m.newPeer()
+	if err != nil {
+		return "", err
+	}
+	track, err := webrtc.NewTrackLocalStaticRTP(capability, "audio", "fragata-audio")
+	if err != nil {
+		cleanup()
+		return "", err
+	}
+	sender, err := pc.AddTrack(track)
+	if err != nil {
+		cleanup()
+		return "", err
+	}
+	drainRTCP(sender)
+
+	go func() {
+		select {
+		case <-peerCtx.Done():
+			return
+		case <-connected:
+		}
+		packets, unsubscribe := hub.SubscribeAudio(512)
+		defer unsubscribe()
+		for {
+			select {
+			case <-peerCtx.Done():
+				return
+			case packet, open := <-packets:
+				if !open {
+					return
+				}
+				if packet.Discontinuity || packet.RTP == nil {
+					continue
+				}
+				if err := track.WriteRTP(packet.RTP); err != nil {
+					return
+				}
+			}
+		}
+	}()
+
+	return completeOffer(ctx, pc, cleanup, offerSDP)
+}
+
+func (m *Manager) newPeer() (*webrtc.PeerConnection, context.Context, <-chan struct{}, func(), error) {
 	m.mu.Lock()
 	if len(m.peers) >= m.maxPeers {
 		m.mu.Unlock()
-		return "", errors.New("se alcanzó el límite de vistas en vivo")
+		return nil, nil, nil, nil, errors.New("se alcanzó el límite de vistas en vivo")
 	}
 	m.mu.Unlock()
 
 	pc, err := webrtc.NewPeerConnection(m.configuration)
 	if err != nil {
-		return "", err
+		return nil, nil, nil, nil, err
 	}
 	peerCtx, cancel := context.WithCancel(context.Background())
 	m.mu.Lock()
@@ -64,7 +162,7 @@ func (m *Manager) Offer(ctx context.Context, hub *stream.Hub, offerSDP, mode str
 		m.mu.Unlock()
 		cancel()
 		_ = pc.Close()
-		return "", errors.New("se alcanzó el límite de vistas en vivo")
+		return nil, nil, nil, nil, errors.New("se alcanzó el límite de vistas en vivo")
 	}
 	m.peers[pc] = cancel
 	m.mu.Unlock()
@@ -89,38 +187,10 @@ func (m *Manager) Offer(ctx context.Context, hub *stream.Hub, offerSDP, mode str
 			cleanup()
 		}
 	})
+	return pc, peerCtx, connected, cleanup, nil
+}
 
-	capability := webrtc.RTPCodecCapability{
-		MimeType:    webrtc.MimeTypeH264,
-		ClockRate:   90000,
-		SDPFmtpLine: h264FMTP(info.SPS),
-	}
-
-	_ = mode // El modo se conserva para diagnóstico; todos los streams se normalizan a access units.
-	track, trackErr := webrtc.NewTrackLocalStaticSample(capability, "video", "fragata")
-	if trackErr != nil {
-		cleanup()
-		return "", trackErr
-	}
-	sender, addErr := pc.AddTrack(track)
-	if addErr != nil {
-		cleanup()
-		return "", addErr
-	}
-	drainRTCP(sender)
-	go func() {
-		select {
-		case <-peerCtx.Done():
-			return
-		case <-connected:
-		}
-		releaseViewer := hub.AcquireViewer()
-		units, unsubscribe := hub.SubscribeAccessUnits(256)
-		defer unsubscribe()
-		defer releaseViewer()
-		relayAccessUnits(peerCtx, hub, track, units)
-	}()
-
+func completeOffer(ctx context.Context, pc *webrtc.PeerConnection, cleanup func(), offerSDP string) (string, error) {
 	if err := pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: offerSDP}); err != nil {
 		cleanup()
 		return "", fmt.Errorf("oferta WebRTC inválida: %w", err)
@@ -175,8 +245,6 @@ func relayAccessUnits(ctx context.Context, hub *stream.Hub, track *webrtc.TrackL
 			if len(unit.NALUs) == 0 {
 				continue
 			}
-			// Starting between keyframes produces a connected but black player.
-			// Wait for an IDR and prepend the current parameter sets.
 			if !started {
 				if !unit.KeyFrame {
 					continue
@@ -238,6 +306,23 @@ func containsH264NALU(nalus [][]byte, wanted byte) bool {
 		}
 	}
 	return false
+}
+
+func webRTCAudioCapability(info stream.AudioInfo) (webrtc.RTPCodecCapability, bool) {
+	switch info.Codec {
+	case "PCMA":
+		return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMA, ClockRate: 8000}, true
+	case "PCMU":
+		return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMU, ClockRate: 8000}, true
+	case "OPUS":
+		channels := uint16(info.Channels)
+		if channels < 1 || channels > 2 {
+			channels = 2
+		}
+		return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: channels, SDPFmtpLine: "minptime=10;useinbandfec=1"}, true
+	default:
+		return webrtc.RTPCodecCapability{}, false
+	}
 }
 
 func h264FMTP(sps []byte) string {

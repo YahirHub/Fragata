@@ -2,7 +2,9 @@ package httpapi
 
 import (
 	"context"
+	"crypto/rand"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,26 +25,30 @@ import (
 	"fragata/internal/model"
 	"fragata/internal/networkdiag"
 	"fragata/internal/onvif"
+	"fragata/internal/retention"
 	fragrtsp "fragata/internal/rtsp"
 	"fragata/internal/store"
+	"fragata/internal/stream"
+	"fragata/internal/upload"
 )
 
 //go:embed static/*
 var staticFiles embed.FS
 
 type Server struct {
-	cfg     config.Config
-	auth    *auth.Manager
-	cameras *camera.Manager
-	live    *live.Manager
-	store   *store.Store
-	logger  *slog.Logger
-	limiter *loginLimiter
-	http    *http.Server
+	cfg      config.Config
+	auth     *auth.Manager
+	cameras  *camera.Manager
+	live     *live.Manager
+	uploader *upload.Uploader
+	store    *store.Store
+	logger   *slog.Logger
+	limiter  *loginLimiter
+	http     *http.Server
 }
 
-func New(cfg config.Config, authManager *auth.Manager, cameras *camera.Manager, liveManager *live.Manager, state *store.Store, logger *slog.Logger) (*Server, error) {
-	s := &Server{cfg: cfg, auth: authManager, cameras: cameras, live: liveManager, store: state, logger: logger, limiter: newLoginLimiter()}
+func New(cfg config.Config, authManager *auth.Manager, cameras *camera.Manager, liveManager *live.Manager, uploader *upload.Uploader, state *store.Store, logger *slog.Logger) (*Server, error) {
+	s := &Server{cfg: cfg, auth: authManager, cameras: cameras, live: liveManager, uploader: uploader, store: state, logger: logger, limiter: newLoginLimiter()}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /login", s.loginPage)
@@ -54,6 +60,8 @@ func New(cfg config.Config, authManager *auth.Manager, cameras *camera.Manager, 
 	protected.HandleFunc("GET /cameras/new", s.newCameraPage)
 	protected.HandleFunc("GET /cameras/{id}/settings", s.cameraSettingsPage)
 	protected.HandleFunc("GET /camera/{id}", s.cameraPage)
+	protected.HandleFunc("GET /settings/sftp", s.sftpSettingsPage)
+	protected.HandleFunc("GET /settings/storage", s.storageSettingsPage)
 	protected.HandleFunc("GET /api/session", s.session)
 	protected.HandleFunc("POST /api/logout", s.logout)
 	protected.HandleFunc("GET /api/cameras", s.listCameras)
@@ -68,6 +76,13 @@ func New(cfg config.Config, authManager *auth.Manager, cameras *camera.Manager, 
 	protected.HandleFunc("POST /api/discovery", s.discovery)
 	protected.HandleFunc("GET /api/status", s.status)
 	protected.HandleFunc("GET /api/uploads", s.uploads)
+	protected.HandleFunc("GET /api/sftp-profiles", s.listSFTPProfiles)
+	protected.HandleFunc("POST /api/sftp-profiles", s.createSFTPProfile)
+	protected.HandleFunc("PATCH /api/sftp-profiles/{id}", s.updateSFTPProfile)
+	protected.HandleFunc("DELETE /api/sftp-profiles/{id}", s.deleteSFTPProfile)
+	protected.HandleFunc("POST /api/sftp-profiles/{id}/test", s.testSFTPProfile)
+	protected.HandleFunc("GET /api/retention", s.getRetention)
+	protected.HandleFunc("PATCH /api/retention", s.updateRetention)
 	protected.HandleFunc("POST /api/cameras/{id}/offer", s.offer)
 
 	sub, err := fs.Sub(staticFiles, "static")
@@ -147,6 +162,14 @@ func (s *Server) cameraPage(w http.ResponseWriter, r *http.Request) {
 	s.serveAsset(w, "viewer.html", "text/html; charset=utf-8")
 }
 
+func (s *Server) sftpSettingsPage(w http.ResponseWriter, _ *http.Request) {
+	s.serveAsset(w, "settings-sftp.html", "text/html; charset=utf-8")
+}
+
+func (s *Server) storageSettingsPage(w http.ResponseWriter, _ *http.Request) {
+	s.serveAsset(w, "settings-storage.html", "text/html; charset=utf-8")
+}
+
 func (s *Server) serveAsset(w http.ResponseWriter, name, contentType string) {
 	data, err := staticFiles.ReadFile("static/" + name)
 	if err != nil {
@@ -194,7 +217,11 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"auth_enabled": s.auth.Enabled(), "csrf_token": sess.CSRFToken, "username": s.cfg.AdminUser,
 		"ffmpeg_available":                 s.cfg.FFmpegPath != "",
+		"environment_sftp_available":       s.cfg.SFTP.Enabled,
 		"default_segment_duration_seconds": int64(s.cfg.SegmentDuration / time.Second),
+		"log_path":                         s.cfg.LogPath,
+		"log_max_bytes":                    s.cfg.LogMaxSize,
+		"retention_interval_seconds":       int64(s.cfg.RetentionInterval / time.Second),
 	})
 }
 
@@ -478,30 +505,287 @@ func (s *Server) uploads(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, publicJobs)
 }
 
+type sftpProfileRequest struct {
+	Name           string `json:"name"`
+	Enabled        bool   `json:"enabled"`
+	Host           string `json:"host"`
+	Port           int    `json:"port"`
+	User           string `json:"user"`
+	Password       string `json:"password,omitempty"`
+	PrivateKeyPath string `json:"private_key_path,omitempty"`
+	KnownHostsPath string `json:"known_hosts_path"`
+	RemoteBaseDir  string `json:"remote_base_dir"`
+	DeleteLocal    bool   `json:"delete_local"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
+}
+
+type sftpProfileView struct {
+	model.SFTPProfilePublic
+	ReadOnly bool `json:"read_only"`
+}
+
+func (s *Server) listSFTPProfiles(w http.ResponseWriter, _ *http.Request) {
+	profiles := s.store.SFTPProfiles()
+	out := make([]sftpProfileView, 0, len(profiles)+1)
+	if s.cfg.SFTP.Enabled {
+		out = append(out, sftpProfileView{SFTPProfilePublic: model.SFTPProfilePublic{
+			ID: upload.EnvironmentProfileID, Name: "Servidor configurado en .env", Enabled: true,
+			Host: s.cfg.SFTP.Host, Port: s.cfg.SFTP.Port, User: s.cfg.SFTP.User,
+			HasPassword: s.cfg.SFTP.Password != "", PrivateKeyPath: s.cfg.SFTP.PrivateKeyPath,
+			KnownHostsPath: s.cfg.SFTP.KnownHostsPath, RemoteBaseDir: s.cfg.SFTP.RemoteBaseDir,
+			DeleteLocal: s.cfg.SFTP.DeleteLocal, TimeoutSeconds: int(s.cfg.SFTP.Timeout / time.Second),
+		}, ReadOnly: true})
+	}
+	for _, profile := range profiles {
+		out = append(out, sftpProfileView{SFTPProfilePublic: profile.Public()})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) createSFTPProfile(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCSRF(w, r) {
+		return
+	}
+	var request sftpProfileRequest
+	if err := decodeJSON(w, r, &request); err != nil {
+		return
+	}
+	profile, err := buildSFTPProfile(model.SFTPProfile{}, request)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	profile.ID, err = secureID()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "no se pudo generar el identificador")
+		return
+	}
+	now := time.Now().UTC()
+	profile.CreatedAt, profile.UpdatedAt = now, now
+	if err := s.store.SaveSFTPProfile(profile); err != nil {
+		writeError(w, http.StatusInternalServerError, "no se pudo guardar el servidor SFTP")
+		return
+	}
+	writeJSON(w, http.StatusCreated, profile.Public())
+}
+
+func (s *Server) updateSFTPProfile(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCSRF(w, r) {
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == upload.EnvironmentProfileID {
+		writeError(w, http.StatusBadRequest, "el servidor configurado en .env es de solo lectura")
+		return
+	}
+	current, ok := s.store.SFTPProfile(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "servidor SFTP no encontrado")
+		return
+	}
+	var request sftpProfileRequest
+	if err := decodeJSON(w, r, &request); err != nil {
+		return
+	}
+	profile, err := buildSFTPProfile(current, request)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	profile.ID, profile.CreatedAt, profile.UpdatedAt = current.ID, current.CreatedAt, time.Now().UTC()
+	if err := s.store.SaveSFTPProfile(profile); err != nil {
+		writeError(w, http.StatusInternalServerError, "no se pudo actualizar el servidor SFTP")
+		return
+	}
+	writeJSON(w, http.StatusOK, profile.Public())
+}
+
+func (s *Server) deleteSFTPProfile(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCSRF(w, r) {
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == upload.EnvironmentProfileID {
+		writeError(w, http.StatusBadRequest, "el servidor configurado en .env no puede eliminarse desde el panel")
+		return
+	}
+	if _, ok := s.store.SFTPProfile(id); !ok {
+		writeError(w, http.StatusNotFound, "servidor SFTP no encontrado")
+		return
+	}
+	for _, camera := range s.store.Cameras() {
+		if camera.SFTPProfileID == id {
+			writeError(w, http.StatusConflict, "el servidor SFTP está asignado a una o más cámaras")
+			return
+		}
+	}
+	for _, job := range s.store.UploadJobs() {
+		if job.SFTPProfileID == id {
+			writeError(w, http.StatusConflict, "el servidor SFTP tiene archivos pendientes de subir")
+			return
+		}
+	}
+	if err := s.store.DeleteSFTPProfile(id); err != nil {
+		writeError(w, http.StatusInternalServerError, "no se pudo eliminar el servidor SFTP")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) testSFTPProfile(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCSRF(w, r) {
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	var profile model.SFTPProfile
+	if id == upload.EnvironmentProfileID && s.cfg.SFTP.Enabled {
+		profile = model.SFTPProfile{Enabled: true, Host: s.cfg.SFTP.Host, Port: s.cfg.SFTP.Port, User: s.cfg.SFTP.User,
+			Password: s.cfg.SFTP.Password, PrivateKeyPath: s.cfg.SFTP.PrivateKeyPath, KnownHostsPath: s.cfg.SFTP.KnownHostsPath,
+			RemoteBaseDir: s.cfg.SFTP.RemoteBaseDir, DeleteLocal: s.cfg.SFTP.DeleteLocal, TimeoutSeconds: int(s.cfg.SFTP.Timeout / time.Second)}
+	} else {
+		var ok bool
+		profile, ok = s.store.SFTPProfile(id)
+		if !ok {
+			writeError(w, http.StatusNotFound, "servidor SFTP no encontrado")
+			return
+		}
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
+	defer cancel()
+	if err := s.uploader.Test(ctx, profile); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, model.RedactSecrets(err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func buildSFTPProfile(current model.SFTPProfile, request sftpProfileRequest) (model.SFTPProfile, error) {
+	profile := current
+	profile.Name = strings.TrimSpace(request.Name)
+	profile.Enabled = request.Enabled
+	profile.Host = strings.TrimSpace(request.Host)
+	profile.Port = request.Port
+	profile.User = strings.TrimSpace(request.User)
+	if request.Password != "" {
+		profile.Password = request.Password
+	}
+	profile.PrivateKeyPath = strings.TrimSpace(request.PrivateKeyPath)
+	profile.KnownHostsPath = strings.TrimSpace(request.KnownHostsPath)
+	profile.RemoteBaseDir = strings.TrimSpace(request.RemoteBaseDir)
+	profile.DeleteLocal = request.DeleteLocal
+	profile.TimeoutSeconds = request.TimeoutSeconds
+	if profile.Name == "" || len([]rune(profile.Name)) > 80 {
+		return model.SFTPProfile{}, errors.New("el nombre SFTP es obligatorio y admite hasta 80 caracteres")
+	}
+	if profile.Host == "" || profile.User == "" {
+		return model.SFTPProfile{}, errors.New("el host y usuario SFTP son obligatorios")
+	}
+	if profile.Port < 1 || profile.Port > 65535 {
+		return model.SFTPProfile{}, errors.New("el puerto SFTP es inválido")
+	}
+	if profile.Password == "" && profile.PrivateKeyPath == "" {
+		return model.SFTPProfile{}, errors.New("configure una contraseña o ruta de llave privada")
+	}
+	if profile.KnownHostsPath == "" {
+		return model.SFTPProfile{}, errors.New("configure el archivo known_hosts para validar el servidor")
+	}
+	if profile.RemoteBaseDir == "" || !strings.HasPrefix(profile.RemoteBaseDir, "/") {
+		return model.SFTPProfile{}, errors.New("el directorio remoto debe ser una ruta absoluta")
+	}
+	if profile.TimeoutSeconds < 5 || profile.TimeoutSeconds > 300 {
+		return model.SFTPProfile{}, errors.New("el timeout SFTP debe estar entre 5 y 300 segundos")
+	}
+	return profile, nil
+}
+
+func (s *Server) getRetention(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.store.Retention())
+}
+
+func (s *Server) updateRetention(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCSRF(w, r) {
+		return
+	}
+	var policy model.RetentionPolicy
+	if err := decodeJSON(w, r, &policy); err != nil {
+		return
+	}
+	policy.Unit = strings.TrimSpace(strings.ToLower(policy.Unit))
+	limits := map[string]int{"days": 3650, "months": 120, "years": 10}
+	limit, valid := limits[policy.Unit]
+	if !valid || policy.Value < 1 || policy.Value > limit {
+		writeError(w, http.StatusBadRequest, "configure una retención válida en días, meses o años")
+		return
+	}
+	policy.UpdatedAt = time.Now().UTC()
+	if err := s.store.SaveRetention(policy); err != nil {
+		writeError(w, http.StatusInternalServerError, "no se pudo guardar la política de retención")
+		return
+	}
+	cleaner := retention.Cleaner{BaseDir: s.cfg.RecordingsDir, Store: s.store, Logger: s.logger}
+	result := cleaner.Cleanup(time.Now())
+	writeJSON(w, http.StatusOK, map[string]any{"policy": policy, "cleanup": result})
+}
+
+func secureID() (string, error) {
+	value := make([]byte, 12)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(value), nil
+}
+
 func (s *Server) offer(w http.ResponseWriter, r *http.Request) {
 	if !s.requireCSRF(w, r) {
 		return
 	}
 	id := strings.TrimSpace(r.PathValue("id"))
 	var request struct {
-		SDP string `json:"sdp"`
+		SDP   string `json:"sdp"`
+		Media string `json:"media,omitempty"`
 	}
 	if err := decodeJSON(w, r, &request); err != nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
 	defer cancel()
-	hub, mode, err := s.cameras.LiveHub(ctx, id)
+	mediaKind := strings.ToLower(strings.TrimSpace(request.Media))
+	if mediaKind == "" {
+		mediaKind = "video"
+	}
+	var (
+		hub  *stream.Hub
+		mode string
+		err  error
+	)
+	switch mediaKind {
+	case "video":
+		hub, mode, err = s.cameras.LiveHub(ctx, id)
+	case "audio":
+		hub, mode, err = s.cameras.LiveAudioHub(ctx, id)
+	default:
+		writeError(w, http.StatusBadRequest, "tipo de medio WebRTC inválido")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, model.RedactSecrets(err.Error()))
 		return
 	}
-	answer, err := s.live.Offer(ctx, hub, request.SDP, mode)
+	var answer string
+	switch mediaKind {
+	case "video":
+		answer, err = s.live.OfferVideo(ctx, hub, request.SDP, mode)
+	case "audio":
+		answer, err = s.live.OfferAudio(ctx, hub, request.SDP)
+	default:
+		writeError(w, http.StatusBadRequest, "tipo de medio WebRTC inválido")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, model.RedactSecrets(err.Error()))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"sdp": answer, "mode": mode})
+	writeJSON(w, http.StatusOK, map[string]string{"sdp": answer, "mode": mode, "media": mediaKind})
 }
 
 func (s *Server) requireCSRF(w http.ResponseWriter, r *http.Request) bool {

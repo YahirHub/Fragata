@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="es" data-bs-theme="light">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#4e73df"><title>Almacenamiento · Fragata</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="/static/styles.css?v=0.7.1">
+</head>
+<body>
+<fragata-app-layout page-title="Almacenamiento" page-icon="bi-device-ssd-fill" active="storage">
+  <section class="page-heading mb-4"><div><span class="section-kicker">Configuración global</span><h2 class="mb-1">Retención y registros</h2><p class="text-body-secondary mb-0">Define cuánto tiempo conservar las grabaciones finalizadas.</p></div></section>
+  <div class="row g-4">
+    <div class="col-12 col-xl-8">
+      <article class="card dashboard-card">
+        <div class="card-header bg-transparent form-section-header"><span class="form-section-icon"><i class="bi bi-calendar2-x"></i></span><div><span class="section-kicker">Limpieza automática</span><h3 class="h5 mb-1">Retención de videos</h3><p class="text-body-secondary mb-0">Nunca elimina archivos abiertos ni grabaciones pendientes de subir.</p></div></div>
+        <div class="card-body p-4">
+          <div class="viewer-option-row mb-4"><div><h4 class="h6 mb-1">Eliminar grabaciones antiguas</h4><p class="text-body-secondary small mb-0">La revisión se ejecuta periódicamente en segundo plano.</p></div><div class="form-check form-switch form-switch-lg"><input id="retentionEnabled" class="form-check-input" type="checkbox" role="switch"></div></div>
+          <label class="form-label">Conservar grabaciones durante</label>
+          <fragata-retention-picker id="retentionPicker"></fragata-retention-picker>
+          <div class="d-flex justify-content-end mt-4"><button id="saveRetention" class="btn btn-primary"><i class="bi bi-check2-circle me-2"></i>Guardar política</button></div>
+        </div>
+      </article>
+    </div>
+    <div class="col-12 col-xl-4">
+      <article class="card dashboard-card mb-4"><div class="card-header bg-transparent"><span class="section-kicker">Seguridad</span><h3 class="h5 mb-1">Archivos protegidos</h3></div><div class="card-body"><ul class="settings-check-list"><li><i class="bi bi-check-circle-fill"></i>No elimina <code>.partial</code></li><li><i class="bi bi-check-circle-fill"></i>No elimina subidas pendientes</li><li><i class="bi bi-check-circle-fill"></i>Solo elimina archivos MKV cerrados</li></ul></div></article>
+      <article class="card dashboard-card"><div class="card-header bg-transparent"><span class="section-kicker">Registro local</span><h3 class="h5 mb-1">logs.txt</h3></div><div class="card-body"><p class="text-body-secondary small">Fragata conserva un único archivo de registros de máximo 1 MB. Al alcanzar el límite, elimina primero las líneas más antiguas.</p><span class="badge text-bg-light border"><i class="bi bi-file-text me-1"></i><code id="logPath" class="text-reset">data/logs.txt</code></span></div></article>
+    </div>
+  </div>
+</fragata-app-layout>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
+<script src="/static/layouts.js?v=0.7.1" defer></script><script src="/static/core.js?v=0.7.1" defer></script><script src="/static/retention-picker.js?v=0.7.1" defer></script><script src="/static/settings-storage.js?v=0.7.1" defer></script>
+</body></html>

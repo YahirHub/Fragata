@@ -26,6 +26,7 @@ type AddRequest struct {
 	Record                 *bool  `json:"record,omitempty"`
 	SegmentDurationSeconds int64  `json:"segment_duration_seconds,omitempty"`
 	Upload                 *bool  `json:"upload,omitempty"`
+	SFTPProfileID          string `json:"sftp_profile_id,omitempty"`
 	InsecureTLS            bool   `json:"insecure_tls,omitempty"`
 }
 
@@ -37,12 +38,15 @@ type ProbeRequest struct {
 }
 
 type ProbeResponse struct {
-	Host    string `json:"host"`
-	RTSPURL string `json:"rtsp_url"`
-	Codec   string `json:"codec"`
-	Port    int    `json:"port"`
-	Width   int    `json:"width,omitempty"`
-	Height  int    `json:"height,omitempty"`
+	Host            string `json:"host"`
+	RTSPURL         string `json:"rtsp_url"`
+	Codec           string `json:"codec"`
+	Port            int    `json:"port"`
+	Width           int    `json:"width,omitempty"`
+	Height          int    `json:"height,omitempty"`
+	AudioCodec      string `json:"audio_codec,omitempty"`
+	AudioSampleRate int    `json:"audio_sample_rate,omitempty"`
+	AudioChannels   int    `json:"audio_channels,omitempty"`
 }
 
 type DetectionResult struct {
@@ -66,6 +70,9 @@ func Detect(ctx context.Context, cfg config.Config, request AddRequest) (Detecti
 		base.Codec = probe.Codec
 		base.Width = probe.Width
 		base.Height = probe.Height
+		base.AudioCodec = probe.AudioCodec
+		base.AudioSampleRate = probe.AudioSampleRate
+		base.AudioChannels = probe.AudioChannels
 		setDirectLiveStream(&base)
 		return DetectionResult{Camera: base, Method: "rtsp-manual"}, nil
 	}
@@ -118,6 +125,9 @@ func Detect(ctx context.Context, cfg config.Config, request AddRequest) (Detecti
 			base.Codec = primary.probe.Codec
 			base.Width = primary.width
 			base.Height = primary.height
+			base.AudioCodec = primary.probe.AudioCodec
+			base.AudioSampleRate = primary.probe.AudioSampleRate
+			base.AudioChannels = primary.probe.AudioChannels
 			base.ProfileToken = primary.profile.Token
 			base.Manufacturer = inspection.Information.Manufacturer
 			base.Model = inspection.Information.Model
@@ -159,6 +169,9 @@ func Detect(ctx context.Context, cfg config.Config, request AddRequest) (Detecti
 		base.Codec = streams.Primary.Codec
 		base.Width = streams.Primary.Width
 		base.Height = streams.Primary.Height
+		base.AudioCodec = streams.Primary.AudioCodec
+		base.AudioSampleRate = streams.Primary.AudioSampleRate
+		base.AudioChannels = streams.Primary.AudioChannels
 		if strings.EqualFold(streams.Primary.Codec, "H264") {
 			setDirectLiveStream(&base)
 		} else if streams.Preview != nil {
@@ -213,7 +226,7 @@ func probeManual(ctx context.Context, cfg config.Config, base model.Camera, rawU
 	if err != nil {
 		return ProbeResponse{}, fmt.Errorf("no se pudo abrir la URL RTSP: %w", err)
 	}
-	return ProbeResponse{Host: base.Host, RTSPURL: probe.URL, Codec: probe.Codec, Port: port, Width: probe.Width, Height: probe.Height}, nil
+	return ProbeResponse{Host: base.Host, RTSPURL: probe.URL, Codec: probe.Codec, Port: port, Width: probe.Width, Height: probe.Height, AudioCodec: probe.AudioCodec, AudioSampleRate: probe.AudioSampleRate, AudioChannels: probe.AudioChannels}, nil
 }
 
 func prepareCamera(cfg config.Config, request AddRequest) (model.Camera, string, int, error) {
@@ -267,7 +280,8 @@ func prepareCamera(cfg config.Config, request AddRequest) (model.Camera, string,
 		Enabled:                boolValue(request.Enabled, true),
 		Record:                 boolValue(request.Record, false),
 		SegmentDurationSeconds: request.SegmentDurationSeconds,
-		Upload:                 boolValue(request.Upload, cfg.SFTP.Enabled),
+		Upload:                 boolValue(request.Upload, false),
+		SFTPProfileID:          strings.TrimSpace(request.SFTPProfileID),
 	}
 	if base.Name == "" {
 		base.Name = "Cámara " + host

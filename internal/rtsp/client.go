@@ -21,10 +21,13 @@ import (
 )
 
 type ProbeResult struct {
-	URL    string `json:"url"`
-	Codec  string `json:"codec"`
-	Width  int    `json:"width,omitempty"`
-	Height int    `json:"height,omitempty"`
+	URL             string `json:"url"`
+	Codec           string `json:"codec"`
+	Width           int    `json:"width,omitempty"`
+	Height          int    `json:"height,omitempty"`
+	AudioCodec      string `json:"audio_codec,omitempty"`
+	AudioSampleRate int    `json:"audio_sample_rate,omitempty"`
+	AudioChannels   int    `json:"audio_channels,omitempty"`
 }
 
 func WithCredentials(raw, username, password string) (string, error) {
@@ -129,6 +132,7 @@ func Probe(ctx context.Context, rawURL string, timeout time.Duration) (ProbeResu
 	if media == nil {
 		return ProbeResult{}, errors.New("el stream no contiene video H.264 ni H.265")
 	}
+	_, _, audioInfo := findSupportedAudio(desc)
 	if _, err := c.Setup(desc.BaseURL, media, 0, 0); err != nil {
 		return ProbeResult{}, fmt.Errorf("SETUP RTSP: %w", err)
 	}
@@ -160,7 +164,7 @@ func Probe(ctx context.Context, rawURL string, timeout time.Duration) (ProbeResu
 	case <-timer.C:
 		return ProbeResult{}, errors.New("el stream RTSP respondió pero no entregó video")
 	case <-packets:
-		return ProbeResult{URL: WithoutCredentials(rawURL), Codec: codec, Width: width, Height: height}, nil
+		return ProbeResult{URL: WithoutCredentials(rawURL), Codec: codec, Width: width, Height: height, AudioCodec: audioInfo.Codec, AudioSampleRate: audioInfo.SampleRate, AudioChannels: audioInfo.Channels}, nil
 	}
 }
 
@@ -200,18 +204,19 @@ func (s *Source) Run(ctx context.Context) error {
 		return fmt.Errorf("DESCRIBE RTSP: %w", err)
 	}
 
+	audioMedia, audioFormat, audioInfo := findSupportedAudio(desc)
 	var h264 *format.H264
 	if media := desc.FindFormat(&h264); media != nil {
-		return s.runH264(ctx, c, desc.BaseURL, media, h264)
+		return s.runH264(ctx, c, desc.BaseURL, media, h264, audioMedia, audioFormat, audioInfo)
 	}
 	var h265 *format.H265
 	if media := desc.FindFormat(&h265); media != nil {
-		return s.runH265(ctx, c, desc.BaseURL, media, h265)
+		return s.runH265(ctx, c, desc.BaseURL, media, h265, audioMedia, audioFormat, audioInfo)
 	}
 	return errors.New("stream sin formato H.264/H.265")
 }
 
-func (s *Source) runH264(ctx context.Context, c *gortsplib.Client, baseURL *base.URL, media *description.Media, forma *format.H264) error {
+func (s *Source) runH264(ctx context.Context, c *gortsplib.Client, baseURL *base.URL, media *description.Media, forma *format.H264, audioMedia *description.Media, audioFormat format.Format, audioInfo stream.AudioInfo) error {
 	decoder, err := forma.CreateDecoder()
 	if err != nil {
 		return fmt.Errorf("crear decoder RTP/H264: %w", err)
@@ -219,11 +224,17 @@ func (s *Source) runH264(ctx context.Context, c *gortsplib.Client, baseURL *base
 	if _, err := c.Setup(baseURL, media, 0, 0); err != nil {
 		return fmt.Errorf("SETUP RTSP: %w", err)
 	}
+	if audioMedia != nil && audioFormat != nil {
+		if _, err := c.Setup(baseURL, audioMedia, 0, 0); err != nil {
+			audioMedia, audioFormat = nil, nil
+		}
+	}
 	generation := s.Hub.BeginSource()
 	defer s.Hub.EndSource(generation)
 	sps, pps := forma.SafeParams()
 	width, height := sourceDimensions("H264", s.Width, s.Height, sps)
 	s.Hub.SetInfo(stream.Info{Codec: "H264", Width: width, Height: height, SPS: sps, PPS: pps})
+	s.configureAudio(c, audioMedia, audioFormat, audioInfo, generation)
 
 	c.OnPacketRTP(media, forma, func(pkt *rtp.Packet) {
 		if s.OnPacket != nil {
@@ -271,7 +282,7 @@ func (s *Source) runH264(ctx context.Context, c *gortsplib.Client, baseURL *base
 	return playUntilDone(ctx, c)
 }
 
-func (s *Source) runH265(ctx context.Context, c *gortsplib.Client, baseURL *base.URL, media *description.Media, forma *format.H265) error {
+func (s *Source) runH265(ctx context.Context, c *gortsplib.Client, baseURL *base.URL, media *description.Media, forma *format.H265, audioMedia *description.Media, audioFormat format.Format, audioInfo stream.AudioInfo) error {
 	decoder, err := forma.CreateDecoder()
 	if err != nil {
 		return fmt.Errorf("crear decoder RTP/H265: %w", err)
@@ -279,11 +290,17 @@ func (s *Source) runH265(ctx context.Context, c *gortsplib.Client, baseURL *base
 	if _, err := c.Setup(baseURL, media, 0, 0); err != nil {
 		return fmt.Errorf("SETUP RTSP: %w", err)
 	}
+	if audioMedia != nil && audioFormat != nil {
+		if _, err := c.Setup(baseURL, audioMedia, 0, 0); err != nil {
+			audioMedia, audioFormat = nil, nil
+		}
+	}
 	generation := s.Hub.BeginSource()
 	defer s.Hub.EndSource(generation)
 	vps, sps, pps := forma.SafeParams()
 	width, height := sourceDimensions("H265", s.Width, s.Height, sps)
 	s.Hub.SetInfo(stream.Info{Codec: "H265", Width: width, Height: height, VPS: vps, SPS: sps, PPS: pps})
+	s.configureAudio(c, audioMedia, audioFormat, audioInfo, generation)
 
 	c.OnPacketRTP(media, forma, func(pkt *rtp.Packet) {
 		if s.OnPacket != nil {
@@ -335,6 +352,108 @@ func (s *Source) runH265(ctx context.Context, c *gortsplib.Client, baseURL *base
 		s.Hub.PublishAccessUnit(stream.AccessUnit{PTS: rtpTimestampDuration(pts, forma.ClockRate()), NALUs: au, KeyFrame: key, Generation: generation})
 	})
 	return playUntilDone(ctx, c)
+}
+
+func findSupportedAudio(desc *description.Session) (*description.Media, format.Format, stream.AudioInfo) {
+	if desc == nil {
+		return nil, nil, stream.AudioInfo{}
+	}
+	for _, media := range desc.Medias {
+		for _, forma := range media.Formats {
+			info := audioFormatInfo(forma)
+			if info.Codec != "" {
+				return media, forma, info
+			}
+		}
+	}
+	return nil, nil, stream.AudioInfo{}
+}
+
+func audioFormatInfo(forma format.Format) stream.AudioInfo {
+	switch typed := forma.(type) {
+	case *format.G711:
+		codec := "PCMA"
+		if typed.MULaw {
+			codec = "PCMU"
+		}
+		channels := typed.ChannelCount
+		if channels < 1 {
+			channels = 1
+		}
+		return stream.AudioInfo{Codec: codec, SampleRate: typed.SampleRate, Channels: channels}
+	case *format.Opus:
+		channels := typed.ChannelCount
+		if channels < 1 || channels > 2 {
+			return stream.AudioInfo{}
+		}
+		return stream.AudioInfo{Codec: "OPUS", SampleRate: typed.ClockRate(), Channels: channels}
+	case *format.MPEG4Audio:
+		if typed.Config == nil {
+			return stream.AudioInfo{}
+		}
+		private, err := typed.Config.Marshal()
+		if err != nil || len(private) == 0 {
+			return stream.AudioInfo{}
+		}
+		channels := int(typed.Config.ChannelConfig)
+		if channels == 7 {
+			channels = 8
+		}
+		if channels < 1 || channels > 8 {
+			channels = 1
+		}
+		return stream.AudioInfo{Codec: "AAC", SampleRate: typed.ClockRate(), Channels: channels, CodecPrivate: private}
+	default:
+		return stream.AudioInfo{}
+	}
+}
+
+func (s *Source) configureAudio(c *gortsplib.Client, media *description.Media, forma format.Format, info stream.AudioInfo, generation uint64) {
+	if media == nil || forma == nil || info.Codec == "" {
+		return
+	}
+	if aac, ok := forma.(*format.MPEG4Audio); ok {
+		decoder, err := aac.CreateDecoder()
+		if err != nil {
+			return
+		}
+		s.Hub.SetAudioInfo(info)
+		c.OnPacketRTP(media, aac, func(pkt *rtp.Packet) {
+			if s.OnPacket != nil {
+				s.OnPacket(len(pkt.Payload))
+			}
+			pts, ok := c.PacketPTS(media, pkt)
+			if !ok {
+				return
+			}
+			ausus, err := decoder.Decode(pkt)
+			if err != nil {
+				return
+			}
+			basePTS := rtpTimestampDuration(pts, aac.ClockRate())
+			frameDuration := 1024 * time.Second / time.Duration(aac.ClockRate())
+			for index, au := range ausus {
+				s.Hub.PublishAudio(stream.AudioPacket{
+					PTS: basePTS + time.Duration(index)*frameDuration, Payload: au, Generation: generation,
+				})
+			}
+		})
+		return
+	}
+	s.Hub.SetAudioInfo(info)
+	c.OnPacketRTP(media, forma, func(pkt *rtp.Packet) {
+		if s.OnPacket != nil {
+			s.OnPacket(len(pkt.Payload))
+		}
+		pts, ok := c.PacketPTS(media, pkt)
+		if !ok {
+			return
+		}
+		s.Hub.PublishAudio(stream.AudioPacket{
+			PTS: rtpTimestampDuration(pts, forma.ClockRate()), Payload: pkt.Payload, RTP: pkt,
+			Generation: generation,
+		})
+	})
 }
 
 func playUntilDone(ctx context.Context, c *gortsplib.Client) error {

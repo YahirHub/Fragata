@@ -23,6 +23,7 @@ type UpdateRequest struct {
 	Record                 *bool   `json:"record,omitempty"`
 	SegmentDurationSeconds *int64  `json:"segment_duration_seconds,omitempty"`
 	Upload                 *bool   `json:"upload,omitempty"`
+	SFTPProfileID          *string `json:"sftp_profile_id,omitempty"`
 }
 
 func (m *Manager) Update(ctx context.Context, id string, request UpdateRequest) (model.Camera, bool, error) {
@@ -61,6 +62,16 @@ func (m *Manager) Update(ctx context.Context, id string, request UpdateRequest) 
 	}
 	if request.Upload != nil {
 		updated.Upload = *request.Upload
+	}
+	if request.SFTPProfileID != nil {
+		profileID := strings.TrimSpace(*request.SFTPProfileID)
+		if profileID != "" && (m.uploader == nil || !m.uploader.Enabled(profileID)) {
+			return model.Camera{}, false, errors.New("el servidor SFTP seleccionado no está disponible")
+		}
+		updated.SFTPProfileID = profileID
+	}
+	if updated.Upload && (m.uploader == nil || !m.uploader.Enabled(updated.SFTPProfileID)) {
+		return model.Camera{}, false, errors.New("seleccione un servidor SFTP habilitado antes de activar las subidas")
 	}
 	if request.SegmentDurationSeconds != nil {
 		if err := validateSegmentDuration(*request.SegmentDurationSeconds); err != nil {
@@ -113,7 +124,7 @@ func (m *Manager) Update(ctx context.Context, id string, request UpdateRequest) 
 		detectRequest := AddRequest{
 			Name: updated.Name, Host: updated.Host, Username: updated.Username, Password: updated.Password,
 			RTSPURL: rawURL, FolderName: updated.FolderName, Enabled: &enabled, Record: &record,
-			SegmentDurationSeconds: updated.SegmentDurationSeconds, Upload: &upload,
+			SegmentDurationSeconds: updated.SegmentDurationSeconds, Upload: &upload, SFTPProfileID: updated.SFTPProfileID,
 		}
 		detected, err := Detect(ctx, m.cfg, detectRequest)
 		if err != nil && !rtspURLChanged && current.RTSPURL != "" {
@@ -132,6 +143,7 @@ func (m *Manager) Update(ctx context.Context, id string, request UpdateRequest) 
 		camera.Record = updated.Record
 		camera.SegmentDurationSeconds = updated.SegmentDurationSeconds
 		camera.Upload = updated.Upload
+		camera.SFTPProfileID = updated.SFTPProfileID
 		updated = camera
 		redetected = true
 	}
@@ -144,7 +156,7 @@ func (m *Manager) Update(ctx context.Context, id string, request UpdateRequest) 
 		return model.Camera{}, false, err
 	}
 
-	restart := connectionChanged || current.Enabled != updated.Enabled || current.FolderName != updated.FolderName || current.Upload != updated.Upload
+	restart := connectionChanged || current.Enabled != updated.Enabled || current.FolderName != updated.FolderName || current.Upload != updated.Upload || current.SFTPProfileID != updated.SFTPProfileID
 	if restart {
 		m.restartWorker(updated)
 	} else {
@@ -267,5 +279,6 @@ func camerasEqualForUpdate(left, right model.Camera) bool {
 		left.SerialNumber == right.SerialNumber && left.FirmwareVersion == right.FirmwareVersion && left.Codec == right.Codec &&
 		left.Width == right.Width && left.Height == right.Height && left.LiveCodec == right.LiveCodec && left.LiveWidth == right.LiveWidth &&
 		left.LiveHeight == right.LiveHeight && left.FolderName == right.FolderName && left.Enabled == right.Enabled && left.Record == right.Record &&
-		left.SegmentDurationSeconds == right.SegmentDurationSeconds && left.Upload == right.Upload
+		left.SegmentDurationSeconds == right.SegmentDurationSeconds && left.Upload == right.Upload && left.SFTPProfileID == right.SFTPProfileID &&
+		left.AudioCodec == right.AudioCodec && left.AudioSampleRate == right.AudioSampleRate && left.AudioChannels == right.AudioChannels
 }

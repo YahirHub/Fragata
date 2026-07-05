@@ -62,3 +62,12 @@ func TestDiscontinuityClearsCachedGOP(t *testing.T) {
 	default:
 	}
 }
+
+func TestBeginSourceClearsStaleAudioInfo(t *testing.T) {
+	hub := NewHub()
+	hub.SetAudioInfo(AudioInfo{Codec: "PCMA", SampleRate: 8000, Channels: 1})
+	hub.BeginSource()
+	if got := hub.AudioInfo(); got.Codec != "" {
+		t.Fatalf("stale audio info was retained: %#v", got)
+	}
+}

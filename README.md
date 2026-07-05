@@ -1,8 +1,8 @@
 # Fragata
 
-Fragata es un servidor de cámaras IP escrito en Go. Detecta dispositivos ONVIF, elige el stream RTSP de mayor resolución para grabarlo sin recomprimir, guarda H.264/H.265 en segmentos MKV, ofrece vista en vivo mediante WebRTC y puede subir grabaciones terminadas por SFTP.
+Fragata es un servidor de cámaras IP escrito en Go. Detecta dispositivos ONVIF, elige el stream RTSP de mayor resolución para grabarlo sin recomprimir, guarda video H.264/H.265 y audio compatible en segmentos MKV, ofrece vista en vivo mediante WebRTC y puede subir grabaciones terminadas por SFTP.
 
-El núcleo sigue siendo un único binario compilable con `CGO_ENABLED=0` y frontend embebido. FFmpeg es totalmente opcional: cuando está disponible, Fragata lo usa como proceso externo únicamente para convertir una vista H.265 a H.264 compatible con el navegador. El archivo MKV conserva siempre el video original de la cámara.
+El núcleo sigue siendo un único binario compilable con `CGO_ENABLED=0` y frontend embebido. FFmpeg es totalmente opcional: cuando está disponible, Fragata lo usa como proceso externo para normalizar la vista H.264 y convertir AAC a PCMU cuando el navegador lo necesita. El archivo MKV conserva siempre el video y audio originales de la cámara.
 
 ## Estado del MVP
 
@@ -25,7 +25,11 @@ Incluido:
 - Recuperación conservadora de parciales después de un apagado inesperado.
 - Vista en vivo WebRTC con reconexión automática, arranque desde el GOP actual, página dedicada por cámara y botón de pantalla completa.
 - Grabación apagada al agregar una cámara, switch persistente y componente reutilizable para elegir entre 1 minuto y 24 horas por archivo.
+- Audio en vivo y dentro del MKV para cámaras que entregan G.711 A-law, G.711 μ-law, Opus o AAC por RTSP.
 - Cola SFTP persistente, reintentos con backoff, `known_hosts`, archivo temporal remoto y checksum SHA-256.
+- Perfiles SFTP globales reutilizables, con múltiples servidores configurables desde el panel y selección independiente por cámara.
+- Retención global configurable en días, meses o años, con protección de grabaciones abiertas y archivos pendientes de subir.
+- Registro local rotativo en `logs.txt`, limitado a 1 MiB mediante eliminación de las líneas más antiguas.
 - Login opcional definido en `.env`.
 - Sesiones persistentes, CSRF, cookies `HttpOnly` y límite básico de intentos de acceso.
 - Credenciales de cámaras cifradas con AES-256-GCM dentro del estado local.
@@ -38,7 +42,7 @@ Incluido:
 
 No incluido todavía:
 
-- Audio dentro del MKV.
+- Transcodificación general de codecs de audio distintos de G.711, Opus y AAC.
 - Entrada mediante protocolo SRT. Las cámaras ONVIF normalmente entregan la transmisión por RTSP; SRT se añadirá como transporte independiente.
 - Detección de personas, mascotas o movimiento.
 - Reproducción histórica y línea de tiempo desde el panel.
@@ -101,7 +105,9 @@ La administración está separada en rutas claras:
 - `/cameras`: CRUD y tabla de cámaras con búsqueda, filtros y menú de acciones.
 - `/cameras/new`: alta y detección de una cámara.
 - `/cameras/<id>/settings`: identidad, carpeta, red, credenciales, grabación y SFTP.
-- `/camera/<id>`: visor en vivo y pantalla completa.
+- `/camera/<id>`: visor en vivo con audio opcional y pantalla completa.
+- `/settings/sftp`: servidores SFTP globales reutilizables.
+- `/settings/storage`: política de retención y estado del registro local.
 
 En escritorio, el sidebar permanece fijo a la izquierda. En pantallas pequeñas se convierte en un menú `offcanvas` accesible desde la barra superior. Las tablas conservan desplazamiento horizontal controlado y los formularios se reorganizan para teléfonos.
 
@@ -111,7 +117,9 @@ Bootstrap 5.3.8 y Bootstrap Icons 1.13.1 se cargan desde jsDelivr con versión f
 
 ## Administrar cámaras
 
-El listado de cámaras usa un menú de tres puntos por fila para abrir el visor, modificar ajustes, redetectar perfiles, iniciar o detener la grabación y eliminar el registro. La página de ajustes permite cambiar nombre, carpeta, IP, usuario, contraseña, URL RTSP, estado, duración y subida SFTP.
+El listado de cámaras usa un menú de tres puntos por fila para abrir el visor, modificar ajustes, redetectar perfiles, iniciar o detener la grabación y eliminar el registro. La página de ajustes permite cambiar nombre, carpeta, IP, usuario, contraseña, URL RTSP, estado, duración, subida SFTP y el servidor global asignado.
+
+El visor comienza silenciado porque los navegadores bloquean la reproducción automática con sonido. Cuando la cámara ofrece audio compatible, aparece el botón **Activar sonido**; la acción del usuario habilita la pista sin reiniciar el video.
 
 Al cambiar IP, usuario, contraseña o URL RTSP, Fragata prueba la nueva configuración antes de guardarla. Una contraseña vacía conserva la credencial cifrada actual. Cambiar la carpeta afecta únicamente a nuevas grabaciones y no mueve los archivos existentes.
 
@@ -313,6 +321,40 @@ readelf -d dist/fragata-linux-amd64
 
 `ldd` debe responder `not a dynamic executable` o equivalente.
 
+## Audio en vivo y grabado
+
+Fragata detecta pistas de audio RTSP compatibles y las distribuye por el mismo hub que el video. Actualmente se admiten:
+
+- G.711 A-law (`PCMA`), habitual en cámaras Imou/Dahua.
+- G.711 μ-law (`PCMU`).
+- Opus mono o estéreo.
+- AAC transportado como MPEG-4 Audio.
+
+El video y el audio originales se guardan sin recomprimir en el mismo MKV. Para la vista web, el video y el audio usan sesiones WebRTC independientes: una falla de audio nunca reinicia ni bloquea el video. G.711 y Opus se envían directamente; cuando la cámara usa AAC y FFmpeg está disponible, Fragata inicia una conversión auxiliar a PCMU únicamente después de que el usuario solicita sonido. La grabación conserva el AAC original.
+
+El visor inicia siempre con una sesión de video sin audio y permanece en `Conectando` hasta confirmar un fotograma decodificado. El audio se negocia solo al pulsar **Activar sonido**, respetando las políticas de reproducción automática del navegador y evitando conexiones RTSP adicionales mientras no se necesitan.
+
+## Servidores SFTP globales
+
+La página **Configuración → Servidores SFTP** permite crear varios perfiles y reutilizarlos en distintas cámaras. Cada perfil contiene host, puerto, usuario, contraseña cifrada o ruta de llave privada, `known_hosts`, directorio remoto, timeout y la opción de eliminar la copia local después de verificar la subida.
+
+El bloque `FRAGATA_SFTP_*` de `.env` sigue siendo compatible y aparece como un perfil global de solo lectura. Al agregar o editar una cámara se selecciona explícitamente qué perfil utilizar. La cola persistente guarda el identificador del perfil para que un archivo siempre se reintente contra el servidor que tenía asignado.
+
+Un perfil no puede eliminarse mientras esté asignado a una cámara o tenga subidas pendientes. Fragata valida obligatoriamente la clave del host mediante `known_hosts`; no utiliza verificaciones inseguras.
+
+## Retención automática y logs
+
+Desde **Configuración → Almacenamiento** puede activarse una política global para conservar grabaciones durante una cantidad de días, meses o años. La política se ejecuta al iniciar, inmediatamente después de guardarla y luego según `FRAGATA_RETENTION_INTERVAL`.
+
+La limpieza:
+
+- Solo elimina archivos `.mkv` finalizados cuya fecha de modificación sea anterior al corte.
+- Nunca elimina `.mkv.partial`.
+- Nunca elimina archivos presentes en la cola SFTP.
+- Elimina directorios vacíos después de completar el barrido.
+
+Fragata escribe eventos tanto en la salida estándar como en `FRAGATA_LOG_PATH`. El archivo `logs.txt` se mantiene por debajo de 1 MiB; al alcanzar el límite conserva los registros recientes y elimina primero líneas completas antiguas. No registra contraseñas ni URLs con credenciales sin censurar.
+
 ## Docker Compose
 
 En servidores Linux, `docker-compose.yml` usa `network_mode: host`. Fragata comparte la red del host para alcanzar cámaras LAN y recibir WS-Discovery multicast. No se declara `ports:` porque el servicio escucha directamente en el puerto `8080` del host.
@@ -386,7 +428,11 @@ journalctl -u fragata -f
 | `POST` | `/api/discovery` | WS-Discovery ONVIF |
 | `GET` | `/api/status` | Estado de streams y grabación |
 | `GET` | `/api/uploads` | Cola SFTP |
-| `POST` | `/api/cameras/{id}/offer` | Negociar WebRTC |
+| `GET/POST` | `/api/sftp-profiles` | Listar o crear perfiles SFTP globales |
+| `PATCH/DELETE` | `/api/sftp-profiles/{id}` | Modificar o eliminar un perfil global |
+| `POST` | `/api/sftp-profiles/{id}/test` | Probar conexión y directorio remoto |
+| `GET/PATCH` | `/api/retention` | Consultar o cambiar la política global de retención |
+| `POST` | `/api/cameras/{id}/offer` | Negociar una sesión WebRTC explícita de `video` o `audio` |
 
 Las operaciones mutables requieren el encabezado `X-Fragata-CSRF` cuando el login está habilitado.
 
@@ -400,9 +446,9 @@ Las operaciones mutables requieren el encabezado `X-Fragata-CSRF` cuando el logi
 - No se usa `InsecureIgnoreHostKey` para SFTP.
 - `insecure_tls` solo afecta una cámara ONVIF HTTPS concreta cuando se solicita desde la API.
 - No publiques el puerto de Fragata directamente en Internet sin HTTPS, firewall y una contraseña robusta.
-- La grabación actual es solo de video. El audio se ignora.
+- El audio PCMA, PCMU y Opus se reproduce directamente; AAC se conserva en MKV y puede convertirse de forma opcional para el navegador mediante FFmpeg sin afectar el video.
 - Los clusters MKV se descargan al archivo aproximadamente cada 5 segundos para limitar memoria y pérdida ante cortes.
-- `FRAGATA_MAX_VIEWERS` limita las conexiones WebRTC simultáneas; el valor predeterminado es 32.
+- `FRAGATA_MAX_VIEWERS` limita espectadores; internamente se reservan hasta dos sesiones WebRTC por visor, una de video y otra opcional de audio.
 - `FRAGATA_LIVE_IDLE_TIMEOUT` apaga FFmpeg o el substream de vista cuando ya no existen espectadores.
 - El escritor H.265 debe validarse con los modelos reales que se usarán antes de considerarlo producción estable.
 
@@ -430,7 +476,11 @@ Prueba real recomendada:
 6. Abrirlo en VLC o mpv y verificar codec, ancho y alto con `ffprobe`.
 7. Cortar la red de la cámara y confirmar reconexión.
 8. Reiniciar Fragata durante un segmento y revisar recuperación del `.partial`.
-9. Confirmar creación del MKV y `.sha256` remotos por SFTP.
+9. Activar el sonido en el visor y confirmar que la pista se escucha cuando la cámara la ofrece.
+10. Revisar con `ffprobe` que el MKV contiene una pista de audio compatible.
+11. Crear dos perfiles SFTP, asignar uno a la cámara y confirmar creación del MKV y `.sha256` remotos.
+12. Aplicar una retención corta sobre archivos de prueba y comprobar que no elimina `.partial` ni subidas pendientes.
+13. Generar actividad y confirmar que `logs.txt` nunca supera 1 MiB.
 
 ## Estructura
 
@@ -442,8 +492,10 @@ internal/httpapi/     API y panel web embebido
 internal/live/        access units H.264 normalizadas hacia WebRTC
 internal/matroska/    escritor MKV sin CGO
 internal/onvif/       WS-Discovery y SOAP ONVIF
-internal/recording/   segmentación y recuperación
+internal/recording/   segmentación, audio y recuperación
 internal/rtsp/        conexión RTSP, sondeo de puertos y diccionario de rutas
+internal/logging/     logs.txt rotativo con límite estricto
+internal/retention/   limpieza segura por antigüedad
 internal/store/       estado JSON atómico y secretos cifrados
 internal/stream/      distribución interna de RTP y access units
 internal/transcode/   FFmpeg opcional y reconstrucción RTP/H.264 para WebRTC

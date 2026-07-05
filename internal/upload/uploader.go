@@ -25,23 +25,41 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
+const EnvironmentProfileID = "__environment__"
+
 type Uploader struct {
-	cfg     config.SFTPConfig
+	legacy  config.SFTPConfig
 	store   *store.Store
 	claimed map[string]struct{}
 	mu      sync.Mutex
 	onError func(error)
+	workers int
 }
 
-func New(cfg config.SFTPConfig, state *store.Store, onError func(error)) *Uploader {
-	return &Uploader{cfg: cfg, store: state, claimed: make(map[string]struct{}), onError: onError}
+func New(legacy config.SFTPConfig, state *store.Store, onError func(error)) *Uploader {
+	workers := legacy.Workers
+	if workers < 1 {
+		workers = 1
+	}
+	return &Uploader{legacy: legacy, store: state, claimed: make(map[string]struct{}), onError: onError, workers: workers}
 }
 
-func (u *Uploader) Enabled() bool { return u != nil && u.cfg.Enabled }
+func (u *Uploader) Enabled(profileID string) bool {
+	if u == nil {
+		return false
+	}
+	_, ok := u.profileConfig(profileID)
+	return ok
+}
 
-func (u *Uploader) Enqueue(cameraID, localPath, relativeRemotePath string) error {
-	if !u.Enabled() {
-		return nil
+func (u *Uploader) Enqueue(cameraID, profileID, localPath, relativeRemotePath string) error {
+	cfg, ok := u.profileConfig(profileID)
+	if !ok {
+		return errors.New("la cámara no tiene un servidor SFTP habilitado")
+	}
+	resolvedID := profileID
+	if resolvedID == "" && u.legacy.Enabled {
+		resolvedID = EnvironmentProfileID
 	}
 	info, err := os.Stat(localPath)
 	if err != nil {
@@ -51,20 +69,17 @@ func (u *Uploader) Enqueue(cameraID, localPath, relativeRemotePath string) error
 	if err != nil {
 		return err
 	}
-	remote := path.Join(u.cfg.RemoteBaseDir, filepath.ToSlash(relativeRemotePath))
+	remote := path.Join(cfg.RemoteBaseDir, filepath.ToSlash(relativeRemotePath))
 	job := model.UploadJob{
-		ID: id, CameraID: cameraID, LocalPath: localPath, RemotePath: remote,
+		ID: id, CameraID: cameraID, SFTPProfileID: resolvedID, LocalPath: localPath, RemotePath: remote,
 		Size: info.Size(), NextAttempt: time.Now(), CreatedAt: time.Now().UTC(),
 	}
 	return u.store.SaveUploadJob(job)
 }
 
 func (u *Uploader) Run(ctx context.Context) {
-	if !u.Enabled() {
-		return
-	}
 	var wg sync.WaitGroup
-	for i := 0; i < u.cfg.Workers; i++ {
+	for i := 0; i < u.workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -133,6 +148,10 @@ func (u *Uploader) process(ctx context.Context, job model.UploadJob) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	cfg, ok := u.profileConfig(job.SFTPProfileID)
+	if !ok {
+		return errors.New("el perfil SFTP de la cola ya no existe o está deshabilitado")
+	}
 	local, err := os.Open(job.LocalPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -151,7 +170,7 @@ func (u *Uploader) process(ctx context.Context, job model.UploadJob) error {
 		return err
 	}
 
-	sshClient, sftpClient, err := u.connect(ctx)
+	sshClient, sftpClient, err := connect(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -159,7 +178,7 @@ func (u *Uploader) process(ctx context.Context, job model.UploadJob) error {
 	defer sftpClient.Close()
 
 	if remoteMatches(sftpClient, job) {
-		return u.complete(job)
+		return u.complete(job, cfg.DeleteLocal)
 	}
 	if err := sftpClient.MkdirAll(path.Dir(job.RemotePath)); err != nil {
 		return fmt.Errorf("crear directorio remoto: %w", err)
@@ -207,7 +226,24 @@ func (u *Uploader) process(ctx context.Context, job model.UploadJob) error {
 	if err := sftpClient.Rename(checksumPartial, checksumPath); err != nil {
 		return fmt.Errorf("finalizar checksum remoto: %w", err)
 	}
-	return u.complete(job)
+	return u.complete(job, cfg.DeleteLocal)
+}
+
+func (u *Uploader) Test(ctx context.Context, profile model.SFTPProfile) error {
+	cfg := profileToConfig(profile)
+	if err := validateConfig(cfg); err != nil {
+		return err
+	}
+	sshClient, client, err := connect(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer sshClient.Close()
+	defer client.Close()
+	if err := client.MkdirAll(cfg.RemoteBaseDir); err != nil {
+		return fmt.Errorf("crear o comprobar directorio remoto: %w", err)
+	}
+	return nil
 }
 
 func remoteMatches(client *sftp.Client, job model.UploadJob) bool {
@@ -228,11 +264,11 @@ func remoteMatches(client *sftp.Client, job model.UploadJob) bool {
 	return len(fields) > 0 && strings.EqualFold(fields[0], job.SHA256)
 }
 
-func (u *Uploader) complete(job model.UploadJob) error {
+func (u *Uploader) complete(job model.UploadJob, deleteLocal bool) error {
 	if err := u.store.DeleteUploadJob(job.ID); err != nil {
 		return err
 	}
-	if u.cfg.DeleteLocal {
+	if deleteLocal {
 		if err := os.Remove(job.LocalPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -240,20 +276,70 @@ func (u *Uploader) complete(job model.UploadJob) error {
 	return nil
 }
 
-func (u *Uploader) connect(ctx context.Context) (*ssh.Client, *sftp.Client, error) {
-	callback, err := knownhosts.New(u.cfg.KnownHostsPath)
+func (u *Uploader) profileConfig(id string) (config.SFTPConfig, bool) {
+	if id == "" || id == EnvironmentProfileID {
+		if u.legacy.Enabled && validateConfig(u.legacy) == nil {
+			return u.legacy, true
+		}
+		return config.SFTPConfig{}, false
+	}
+	profile, ok := u.store.SFTPProfile(id)
+	if !ok || !profile.Enabled {
+		return config.SFTPConfig{}, false
+	}
+	cfg := profileToConfig(profile)
+	if validateConfig(cfg) != nil {
+		return config.SFTPConfig{}, false
+	}
+	return cfg, true
+}
+
+func profileToConfig(profile model.SFTPProfile) config.SFTPConfig {
+	timeout := time.Duration(profile.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	return config.SFTPConfig{
+		Enabled: true, Host: profile.Host, Port: profile.Port, User: profile.User, Password: profile.Password,
+		PrivateKeyPath: profile.PrivateKeyPath, KnownHostsPath: profile.KnownHostsPath, RemoteBaseDir: profile.RemoteBaseDir,
+		Workers: 1, Timeout: timeout, DeleteLocal: profile.DeleteLocal,
+	}
+}
+
+func validateConfig(cfg config.SFTPConfig) error {
+	if !cfg.Enabled {
+		return errors.New("perfil SFTP deshabilitado")
+	}
+	if strings.TrimSpace(cfg.Host) == "" || strings.TrimSpace(cfg.User) == "" {
+		return errors.New("SFTP requiere host y usuario")
+	}
+	if cfg.Port < 1 || cfg.Port > 65535 {
+		return errors.New("puerto SFTP inválido")
+	}
+	if cfg.PrivateKeyPath == "" && cfg.Password == "" {
+		return errors.New("SFTP requiere contraseña o llave privada")
+	}
+	if cfg.KnownHostsPath == "" {
+		return errors.New("SFTP requiere un archivo known_hosts")
+	}
+	if strings.TrimSpace(cfg.RemoteBaseDir) == "" {
+		return errors.New("SFTP requiere un directorio remoto")
+	}
+	return nil
+}
+
+func connect(ctx context.Context, cfg config.SFTPConfig) (*ssh.Client, *sftp.Client, error) {
+	callback, err := knownhosts.New(cfg.KnownHostsPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("cargar known_hosts: %w", err)
 	}
-	auth, err := u.authMethods()
+	auth, err := authMethods(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
-	sshConfig := &ssh.ClientConfig{
-		User: u.cfg.User, Auth: auth, HostKeyCallback: callback, Timeout: u.cfg.Timeout,
-	}
-	address := net.JoinHostPort(u.cfg.Host, fmt.Sprintf("%d", u.cfg.Port))
-	dialer := net.Dialer{Timeout: u.cfg.Timeout}
+	sshConfig := &ssh.ClientConfig{User: cfg.User, Auth: auth, HostKeyCallback: callback, Timeout: cfg.Timeout}
+	address := net.JoinHostPort(cfg.Host, fmt.Sprintf("%d", cfg.Port))
+	dialer := net.Dialer{Timeout: cfg.Timeout}
 	conn, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
 		return nil, nil, err
@@ -272,10 +358,10 @@ func (u *Uploader) connect(ctx context.Context) (*ssh.Client, *sftp.Client, erro
 	return sshClient, sftpClient, nil
 }
 
-func (u *Uploader) authMethods() ([]ssh.AuthMethod, error) {
+func authMethods(cfg config.SFTPConfig) ([]ssh.AuthMethod, error) {
 	methods := make([]ssh.AuthMethod, 0, 2)
-	if u.cfg.PrivateKeyPath != "" {
-		raw, err := os.ReadFile(u.cfg.PrivateKeyPath)
+	if cfg.PrivateKeyPath != "" {
+		raw, err := os.ReadFile(cfg.PrivateKeyPath)
 		if err != nil {
 			return nil, fmt.Errorf("leer llave SFTP: %w", err)
 		}
@@ -285,8 +371,8 @@ func (u *Uploader) authMethods() ([]ssh.AuthMethod, error) {
 		}
 		methods = append(methods, ssh.PublicKeys(signer))
 	}
-	if u.cfg.Password != "" {
-		methods = append(methods, ssh.Password(u.cfg.Password))
+	if cfg.Password != "" {
+		methods = append(methods, ssh.Password(cfg.Password))
 	}
 	if len(methods) == 0 {
 		return nil, errors.New("no hay método de autenticación SFTP")

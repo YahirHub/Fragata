@@ -487,13 +487,7 @@ fragata-app-layout:not([data-ready="true"]), fragata-auth-layout:not([data-ready
 @media (prefers-reduced-motion: reduce) {
   .viewer-loader-ring,
   .viewer-loader-icon { animation: none; }
-  
-.viewer-stage.viewer-aspect-wide { aspect-ratio: 16 / 9; }
-.viewer-stage.viewer-aspect-landscape { aspect-ratio: 4 / 3; }
-.viewer-stage.viewer-aspect-square { aspect-ratio: 1 / 1; }
-.viewer-stage.viewer-aspect-portrait { aspect-ratio: 9 / 16; max-height: min(78vh, 920px); }
-
-.viewer-stage video { transition: none; }
+  .viewer-stage video { transition: none; }
 }
 .viewer-controls {
   display: flex;
@@ -523,3 +517,10 @@ fragata-app-layout:not([data-ready="true"]), fragata-auth-layout:not([data-ready
   .viewer-option-row { align-items: stretch; flex-direction: column; }
   .viewer-option-row .form-switch { align-self: flex-start; }
 }
+
+/* Global settings */
+.retention-picker { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(150px, .75fr); gap: .75rem; max-width: 460px; }
+.settings-check-list { display: grid; gap: .75rem; margin: 0; padding: 0; list-style: none; color: #57647b; font-size: .78rem; }
+.settings-check-list li { display: flex; align-items: center; gap: .65rem; }
+.settings-check-list i { color: #198754; }
+@media (max-width: 575.98px) { .retention-picker { grid-template-columns: 1fr; max-width: none; } }

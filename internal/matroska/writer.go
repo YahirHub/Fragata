@@ -13,31 +13,36 @@ import (
 )
 
 var (
-	idEBML           = []byte{0x1A, 0x45, 0xDF, 0xA3}
-	idSegment        = []byte{0x18, 0x53, 0x80, 0x67}
-	idInfo           = []byte{0x15, 0x49, 0xA9, 0x66}
-	idTracks         = []byte{0x16, 0x54, 0xAE, 0x6B}
-	idCluster        = []byte{0x1F, 0x43, 0xB6, 0x75}
-	idTimestamp      = []byte{0xE7}
-	idSimpleBlock    = []byte{0xA3}
-	idTimestampScale = []byte{0x2A, 0xD7, 0xB1}
-	idMuxingApp      = []byte{0x4D, 0x80}
-	idWritingApp     = []byte{0x57, 0x41}
-	idTrackEntry     = []byte{0xAE}
-	idTrackNumber    = []byte{0xD7}
-	idTrackUID       = []byte{0x73, 0xC5}
-	idTrackType      = []byte{0x83}
-	idFlagLacing     = []byte{0x9C}
-	idCodecID        = []byte{0x86}
-	idCodecPrivate   = []byte{0x63, 0xA2}
-	idVideo          = []byte{0xE0}
-	idPixelWidth     = []byte{0xB0}
-	idPixelHeight    = []byte{0xBA}
+	idEBML              = []byte{0x1A, 0x45, 0xDF, 0xA3}
+	idSegment           = []byte{0x18, 0x53, 0x80, 0x67}
+	idInfo              = []byte{0x15, 0x49, 0xA9, 0x66}
+	idTracks            = []byte{0x16, 0x54, 0xAE, 0x6B}
+	idCluster           = []byte{0x1F, 0x43, 0xB6, 0x75}
+	idTimestamp         = []byte{0xE7}
+	idSimpleBlock       = []byte{0xA3}
+	idTimestampScale    = []byte{0x2A, 0xD7, 0xB1}
+	idMuxingApp         = []byte{0x4D, 0x80}
+	idWritingApp        = []byte{0x57, 0x41}
+	idTrackEntry        = []byte{0xAE}
+	idTrackNumber       = []byte{0xD7}
+	idTrackUID          = []byte{0x73, 0xC5}
+	idTrackType         = []byte{0x83}
+	idFlagLacing        = []byte{0x9C}
+	idCodecID           = []byte{0x86}
+	idCodecPrivate      = []byte{0x63, 0xA2}
+	idVideo             = []byte{0xE0}
+	idAudio             = []byte{0xE1}
+	idSamplingFrequency = []byte{0xB5}
+	idChannels          = []byte{0x9F}
+	idBitDepth          = []byte{0x62, 0x64}
+	idPixelWidth        = []byte{0xB0}
+	idPixelHeight       = []byte{0xBA}
 )
 
 type Writer struct {
 	out          io.Writer
 	info         stream.Info
+	audioInfo    stream.AudioInfo
 	origin       time.Duration
 	originSet    bool
 	cluster      bytes.Buffer
@@ -47,6 +52,10 @@ type Writer struct {
 }
 
 func New(out io.Writer, info stream.Info) (*Writer, error) {
+	return NewWithAudio(out, info, stream.AudioInfo{})
+}
+
+func NewWithAudio(out io.Writer, info stream.Info, audioInfo stream.AudioInfo) (*Writer, error) {
 	if out == nil {
 		return nil, errors.New("writer requerido")
 	}
@@ -65,7 +74,7 @@ func New(out io.Writer, info stream.Info) (*Writer, error) {
 	default:
 		return nil, fmt.Errorf("codec no soportado: %s", info.Codec)
 	}
-	w := &Writer{out: out, info: info}
+	w := &Writer{out: out, info: info, audioInfo: normalizeAudioInfo(audioInfo)}
 	if err := w.writeHeader(); err != nil {
 		return nil, err
 	}
@@ -118,6 +127,24 @@ func (w *Writer) writeHeader() error {
 	writeElementMust(&track, idVideo, video.Bytes())
 	var tracks bytes.Buffer
 	writeElementMust(&tracks, idTrackEntry, track.Bytes())
+	if w.audioInfo.Codec != "" {
+		var audio bytes.Buffer
+		writeFloat(&audio, idSamplingFrequency, float64(w.audioInfo.SampleRate))
+		writeUint(&audio, idChannels, uint64(w.audioInfo.Channels))
+		writeUint(&audio, idBitDepth, 8)
+		var audioTrack bytes.Buffer
+		writeUint(&audioTrack, idTrackNumber, 2)
+		writeUint(&audioTrack, idTrackUID, 2)
+		writeUint(&audioTrack, idTrackType, 2)
+		writeUint(&audioTrack, idFlagLacing, 0)
+		codecID, private := audioCodecData(w.audioInfo)
+		writeString(&audioTrack, idCodecID, codecID)
+		if len(private) > 0 {
+			writeBinary(&audioTrack, idCodecPrivate, private)
+		}
+		writeElementMust(&audioTrack, idAudio, audio.Bytes())
+		writeElementMust(&tracks, idTrackEntry, audioTrack.Bytes())
+	}
 	return writeElement(w.out, idTracks, tracks.Bytes())
 }
 
@@ -165,6 +192,37 @@ func (w *Writer) WriteAccessUnit(au stream.AccessUnit) error {
 		block[3] = 0x80
 	}
 	block = append(block, frame...)
+	return writeElement(&w.cluster, idSimpleBlock, block)
+}
+
+func (w *Writer) WriteAudio(packet stream.AudioPacket) error {
+	if w.closed {
+		return errors.New("writer cerrado")
+	}
+	if w.audioInfo.Codec == "" || len(packet.Payload) == 0 || !w.originSet {
+		return nil
+	}
+	absoluteMS := (packet.PTS - w.origin).Milliseconds()
+	if absoluteMS < 0 {
+		return nil
+	}
+	if !w.clusterSet || absoluteMS-w.clusterStart > 5_000 || absoluteMS-w.clusterStart > math.MaxInt16 {
+		if err := w.flushCluster(); err != nil {
+			return err
+		}
+		w.clusterStart = absoluteMS
+		w.clusterSet = true
+		writeUint(&w.cluster, idTimestamp, uint64(w.clusterStart))
+	}
+	relative := absoluteMS - w.clusterStart
+	if relative < math.MinInt16 || relative > math.MaxInt16 {
+		return errors.New("timestamp de audio fuera del rango de cluster")
+	}
+	block := make([]byte, 4, 4+len(packet.Payload))
+	block[0] = 0x82
+	binary.BigEndian.PutUint16(block[1:3], uint16(int16(relative)))
+	block[3] = 0x80
+	block = append(block, packet.Payload...)
 	return writeElement(&w.cluster, idSimpleBlock, block)
 }
 
@@ -229,6 +287,67 @@ func hevcDecoderConfigurationRecord(vps, sps, pps []byte) []byte {
 		out = append(out, item.nalu...)
 	}
 	return out
+}
+
+func normalizeAudioInfo(info stream.AudioInfo) stream.AudioInfo {
+	switch info.Codec {
+	case "PCMA", "PCMU":
+		if info.SampleRate <= 0 {
+			info.SampleRate = 8000
+		}
+		info.Channels = 1
+		return info
+	case "OPUS":
+		info.SampleRate = 48000
+		if info.Channels < 1 || info.Channels > 2 {
+			info.Channels = 2
+		}
+		return info
+	case "AAC":
+		if info.SampleRate <= 0 || info.Channels < 1 || len(info.CodecPrivate) == 0 {
+			return stream.AudioInfo{}
+		}
+		return info
+	default:
+		return stream.AudioInfo{}
+	}
+}
+
+func audioCodecData(info stream.AudioInfo) (string, []byte) {
+	if info.Codec == "AAC" {
+		return "A_AAC", append([]byte(nil), info.CodecPrivate...)
+	}
+	if info.Codec == "OPUS" {
+		channels := byte(info.Channels)
+		if channels == 0 {
+			channels = 2
+		}
+		private := []byte{'O', 'p', 'u', 's', 'H', 'e', 'a', 'd', 1, channels, 0, 0, 0x80, 0xbb, 0, 0, 0, 0, 0}
+		return "A_OPUS", private
+	}
+	formatTag := uint16(6)
+	if info.Codec == "PCMU" {
+		formatTag = 7
+	}
+	channels := uint16(1)
+	sampleRate := uint32(info.SampleRate)
+	if sampleRate == 0 {
+		sampleRate = 8000
+	}
+	private := make([]byte, 18)
+	binary.LittleEndian.PutUint16(private[0:2], formatTag)
+	binary.LittleEndian.PutUint16(private[2:4], channels)
+	binary.LittleEndian.PutUint32(private[4:8], sampleRate)
+	binary.LittleEndian.PutUint32(private[8:12], sampleRate*uint32(channels))
+	binary.LittleEndian.PutUint16(private[12:14], channels)
+	binary.LittleEndian.PutUint16(private[14:16], 8)
+	return "A_MS/ACM", private
+}
+
+func writeFloat(w io.Writer, id []byte, value float64) {
+	var data [8]byte
+	binary.BigEndian.PutUint64(data[:], math.Float64bits(value))
+	writeElementMust(w, id, data[:])
 }
 
 func appendUint16(dst []byte, value int) []byte {

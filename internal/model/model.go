@@ -37,6 +37,10 @@ type Camera struct {
 	Record                 bool      `json:"record"`
 	SegmentDurationSeconds int64     `json:"segment_duration_seconds"`
 	Upload                 bool      `json:"upload"`
+	SFTPProfileID          string    `json:"sftp_profile_id,omitempty"`
+	AudioCodec             string    `json:"audio_codec,omitempty"`
+	AudioSampleRate        int       `json:"audio_sample_rate,omitempty"`
+	AudioChannels          int       `json:"audio_channels,omitempty"`
 	CreatedAt              time.Time `json:"created_at"`
 	UpdatedAt              time.Time `json:"updated_at"`
 }
@@ -66,6 +70,10 @@ type CameraPublic struct {
 	Record                 bool      `json:"record"`
 	SegmentDurationSeconds int64     `json:"segment_duration_seconds"`
 	Upload                 bool      `json:"upload"`
+	SFTPProfileID          string    `json:"sftp_profile_id,omitempty"`
+	AudioCodec             string    `json:"audio_codec,omitempty"`
+	AudioSampleRate        int       `json:"audio_sample_rate,omitempty"`
+	AudioChannels          int       `json:"audio_channels,omitempty"`
 	CreatedAt              time.Time `json:"created_at"`
 	UpdatedAt              time.Time `json:"updated_at"`
 }
@@ -77,6 +85,7 @@ func (c Camera) Public() CameraPublic {
 		SerialNumber: c.SerialNumber, FirmwareVersion: c.FirmwareVersion, Codec: c.Codec, Width: c.Width, Height: c.Height,
 		LiveCodec: c.LiveCodec, LiveWidth: c.LiveWidth, LiveHeight: c.LiveHeight, FolderName: c.FolderName, HasPassword: c.Password != "",
 		Enabled: c.Enabled, Record: c.Record, SegmentDurationSeconds: c.SegmentDurationSeconds, Upload: c.Upload,
+		SFTPProfileID: c.SFTPProfileID, AudioCodec: c.AudioCodec, AudioSampleRate: c.AudioSampleRate, AudioChannels: c.AudioChannels,
 		CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
 	}
 }
@@ -89,35 +98,102 @@ type Session struct {
 }
 
 type UploadJob struct {
-	ID          string    `json:"id"`
-	CameraID    string    `json:"camera_id"`
-	LocalPath   string    `json:"local_path"`
-	RemotePath  string    `json:"remote_path"`
-	SHA256      string    `json:"sha256,omitempty"`
-	Size        int64     `json:"size"`
-	Attempts    int       `json:"attempts"`
-	NextAttempt time.Time `json:"next_attempt"`
-	CreatedAt   time.Time `json:"created_at"`
-	CompletedAt time.Time `json:"completed_at,omitempty"`
-	LastError   string    `json:"last_error,omitempty"`
+	ID            string    `json:"id"`
+	CameraID      string    `json:"camera_id"`
+	SFTPProfileID string    `json:"sftp_profile_id,omitempty"`
+	LocalPath     string    `json:"local_path"`
+	RemotePath    string    `json:"remote_path"`
+	SHA256        string    `json:"sha256,omitempty"`
+	Size          int64     `json:"size"`
+	Attempts      int       `json:"attempts"`
+	NextAttempt   time.Time `json:"next_attempt"`
+	CreatedAt     time.Time `json:"created_at"`
+	CompletedAt   time.Time `json:"completed_at,omitempty"`
+	LastError     string    `json:"last_error,omitempty"`
 }
 
 type UploadJobPublic struct {
-	ID          string    `json:"id"`
-	CameraID    string    `json:"camera_id"`
-	RemotePath  string    `json:"remote_path"`
-	Size        int64     `json:"size"`
-	Attempts    int       `json:"attempts"`
-	NextAttempt time.Time `json:"next_attempt"`
-	CreatedAt   time.Time `json:"created_at"`
-	LastError   string    `json:"last_error,omitempty"`
+	ID            string    `json:"id"`
+	CameraID      string    `json:"camera_id"`
+	SFTPProfileID string    `json:"sftp_profile_id,omitempty"`
+	RemotePath    string    `json:"remote_path"`
+	Size          int64     `json:"size"`
+	Attempts      int       `json:"attempts"`
+	NextAttempt   time.Time `json:"next_attempt"`
+	CreatedAt     time.Time `json:"created_at"`
+	LastError     string    `json:"last_error,omitempty"`
 }
 
 func (j UploadJob) Public() UploadJobPublic {
 	return UploadJobPublic{
-		ID: j.ID, CameraID: j.CameraID, RemotePath: j.RemotePath, Size: j.Size,
+		ID: j.ID, CameraID: j.CameraID, SFTPProfileID: j.SFTPProfileID, RemotePath: j.RemotePath, Size: j.Size,
 		Attempts: j.Attempts, NextAttempt: j.NextAttempt, CreatedAt: j.CreatedAt,
 		LastError: RedactSecrets(j.LastError),
+	}
+}
+
+type SFTPProfile struct {
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	Enabled        bool      `json:"enabled"`
+	Host           string    `json:"host"`
+	Port           int       `json:"port"`
+	User           string    `json:"user"`
+	Password       string    `json:"password,omitempty"`
+	PrivateKeyPath string    `json:"private_key_path,omitempty"`
+	KnownHostsPath string    `json:"known_hosts_path"`
+	RemoteBaseDir  string    `json:"remote_base_dir"`
+	DeleteLocal    bool      `json:"delete_local"`
+	TimeoutSeconds int       `json:"timeout_seconds"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+type SFTPProfilePublic struct {
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	Enabled        bool      `json:"enabled"`
+	Host           string    `json:"host"`
+	Port           int       `json:"port"`
+	User           string    `json:"user"`
+	HasPassword    bool      `json:"has_password"`
+	PrivateKeyPath string    `json:"private_key_path,omitempty"`
+	KnownHostsPath string    `json:"known_hosts_path"`
+	RemoteBaseDir  string    `json:"remote_base_dir"`
+	DeleteLocal    bool      `json:"delete_local"`
+	TimeoutSeconds int       `json:"timeout_seconds"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+func (p SFTPProfile) Public() SFTPProfilePublic {
+	return SFTPProfilePublic{
+		ID: p.ID, Name: p.Name, Enabled: p.Enabled, Host: p.Host, Port: p.Port, User: p.User, HasPassword: p.Password != "",
+		PrivateKeyPath: p.PrivateKeyPath, KnownHostsPath: p.KnownHostsPath, RemoteBaseDir: p.RemoteBaseDir,
+		DeleteLocal: p.DeleteLocal, TimeoutSeconds: p.TimeoutSeconds, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
+	}
+}
+
+type RetentionPolicy struct {
+	Enabled   bool      `json:"enabled"`
+	Value     int       `json:"value"`
+	Unit      string    `json:"unit"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (p RetentionPolicy) Cutoff(now time.Time) (time.Time, bool) {
+	if !p.Enabled || p.Value < 1 {
+		return time.Time{}, false
+	}
+	switch p.Unit {
+	case "days":
+		return now.AddDate(0, 0, -p.Value), true
+	case "months":
+		return now.AddDate(0, -p.Value, 0), true
+	case "years":
+		return now.AddDate(-p.Value, 0, 0), true
+	default:
+		return time.Time{}, false
 	}
 }
 
@@ -134,13 +210,18 @@ type RuntimeStatus struct {
 	PacketsReceived  uint64    `json:"packets_received"`
 	Viewers          int       `json:"viewers"`
 	LiveMode         string    `json:"live_mode,omitempty"`
+	AudioCodec       string    `json:"audio_codec,omitempty"`
+	AudioSampleRate  int       `json:"audio_sample_rate,omitempty"`
+	AudioChannels    int       `json:"audio_channels,omitempty"`
 }
 
 type State struct {
-	Version     int                  `json:"version"`
-	Cameras     map[string]Camera    `json:"cameras"`
-	Sessions    map[string]Session   `json:"sessions"`
-	UploadQueue map[string]UploadJob `json:"upload_queue"`
+	Version      int                    `json:"version"`
+	Cameras      map[string]Camera      `json:"cameras"`
+	Sessions     map[string]Session     `json:"sessions"`
+	UploadQueue  map[string]UploadJob   `json:"upload_queue"`
+	SFTPProfiles map[string]SFTPProfile `json:"sftp_profiles"`
+	Retention    RetentionPolicy        `json:"retention"`
 }
 
 var urlPattern = regexp.MustCompile(`(?i)(?:rtsp|rtsps|http|https)://[^\s"'<>]+`)

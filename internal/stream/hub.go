@@ -21,10 +21,25 @@ type Info struct {
 	PPS    []byte
 }
 
+type AudioInfo struct {
+	Codec        string
+	SampleRate   int
+	Channels     int
+	CodecPrivate []byte
+}
+
 type AccessUnit struct {
 	PTS           time.Duration
 	NALUs         [][]byte
 	KeyFrame      bool
+	Generation    uint64
+	Discontinuity bool
+}
+
+type AudioPacket struct {
+	PTS           time.Duration
+	Payload       []byte
+	RTP           *rtp.Packet
 	Generation    uint64
 	Discontinuity bool
 }
@@ -36,11 +51,20 @@ type accessUnitSubscription struct {
 	once     sync.Once
 }
 
+type audioSubscription struct {
+	channel  chan AudioPacket
+	reliable bool
+	done     chan struct{}
+	once     sync.Once
+}
+
 type Hub struct {
 	mu         sync.RWMutex
 	info       Info
+	audioInfo  AudioInfo
 	rtpSubs    map[chan *rtp.Packet]struct{}
 	auSubs     map[*accessUnitSubscription]struct{}
+	audioSubs  map[*audioSubscription]struct{}
 	generation uint64
 	viewers    int
 	closed     bool
@@ -49,7 +73,11 @@ type Hub struct {
 }
 
 func NewHub() *Hub {
-	return &Hub{rtpSubs: make(map[chan *rtp.Packet]struct{}), auSubs: make(map[*accessUnitSubscription]struct{})}
+	return &Hub{
+		rtpSubs:   make(map[chan *rtp.Packet]struct{}),
+		auSubs:    make(map[*accessUnitSubscription]struct{}),
+		audioSubs: make(map[*audioSubscription]struct{}),
+	}
 }
 
 func (h *Hub) SetInfo(info Info) {
@@ -71,6 +99,21 @@ func (h *Hub) Info() Info {
 	return out
 }
 
+func (h *Hub) SetAudioInfo(info AudioInfo) {
+	h.mu.Lock()
+	info.CodecPrivate = append([]byte(nil), info.CodecPrivate...)
+	h.audioInfo = info
+	h.mu.Unlock()
+}
+
+func (h *Hub) AudioInfo() AudioInfo {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	out := h.audioInfo
+	out.CodecPrivate = append([]byte(nil), out.CodecPrivate...)
+	return out
+}
+
 // BeginSource identifies a new RTSP session. Recorders use the generation to
 // close the previous file before timestamps restart after a reconnect.
 func (h *Hub) BeginSource() uint64 {
@@ -80,17 +123,19 @@ func (h *Hub) BeginSource() uint64 {
 		return 0
 	}
 	h.generation++
+	h.audioInfo = AudioInfo{}
 	h.clearCachedGOPLocked()
 	return h.generation
 }
 
-// EndSource informs subscribers that the current RTSP session ended. The
-// marker contains no video and is never written to a recording.
+// EndSource informs subscribers that the current RTSP session ended. Markers
+// contain no media and are never written to a recording.
 func (h *Hub) EndSource(generation uint64) {
 	if generation == 0 {
 		return
 	}
 	h.PublishAccessUnit(AccessUnit{Generation: generation, Discontinuity: true})
+	h.PublishAudio(AudioPacket{Generation: generation, Discontinuity: true})
 }
 
 func (h *Hub) PublishRTP(pkt *rtp.Packet) {
@@ -132,6 +177,34 @@ func (h *Hub) PublishAccessUnit(au AccessUnit) {
 		}
 		select {
 		case subscription.channel <- copyAU:
+		case <-subscription.done:
+		default:
+		}
+	}
+}
+
+func (h *Hub) PublishAudio(packet AudioPacket) {
+	h.mu.RLock()
+	if h.closed {
+		h.mu.RUnlock()
+		return
+	}
+	subscriptions := make([]*audioSubscription, 0, len(h.audioSubs))
+	for subscription := range h.audioSubs {
+		subscriptions = append(subscriptions, subscription)
+	}
+	h.mu.RUnlock()
+	for _, subscription := range subscriptions {
+		copyPacket := cloneAudioPacket(packet)
+		if subscription.reliable {
+			select {
+			case subscription.channel <- copyPacket:
+			case <-subscription.done:
+			}
+			continue
+		}
+		select {
+		case subscription.channel <- copyPacket:
 		case <-subscription.done:
 		default:
 		}
@@ -197,6 +270,19 @@ func cloneAccessUnit(au AccessUnit) AccessUnit {
 	return out
 }
 
+func cloneAudioPacket(packet AudioPacket) AudioPacket {
+	out := AudioPacket{
+		PTS:           packet.PTS,
+		Payload:       append([]byte(nil), packet.Payload...),
+		Generation:    packet.Generation,
+		Discontinuity: packet.Discontinuity,
+	}
+	if packet.RTP != nil {
+		out.RTP = packet.RTP.Clone()
+	}
+	return out
+}
+
 func (h *Hub) SubscribeRTP(size int) (<-chan *rtp.Packet, func()) {
 	if size < 1 {
 		size = 256
@@ -246,11 +332,7 @@ func (h *Hub) subscribeAccessUnits(size int, reliable bool) (<-chan AccessUnit, 
 			size = minimum
 		}
 	}
-	subscription := &accessUnitSubscription{
-		channel:  make(chan AccessUnit, size),
-		reliable: reliable,
-		done:     make(chan struct{}),
-	}
+	subscription := &accessUnitSubscription{channel: make(chan AccessUnit, size), reliable: reliable, done: make(chan struct{})}
 	if h.closed {
 		close(subscription.done)
 	} else {
@@ -266,6 +348,36 @@ func (h *Hub) subscribeAccessUnits(size int, reliable bool) (<-chan AccessUnit, 
 			close(subscription.done)
 			h.mu.Lock()
 			delete(h.auSubs, subscription)
+			h.mu.Unlock()
+		})
+	}
+}
+
+func (h *Hub) SubscribeAudio(size int) (<-chan AudioPacket, func()) {
+	return h.subscribeAudio(size, false)
+}
+
+func (h *Hub) SubscribeAudioReliable(size int) (<-chan AudioPacket, func()) {
+	return h.subscribeAudio(size, true)
+}
+
+func (h *Hub) subscribeAudio(size int, reliable bool) (<-chan AudioPacket, func()) {
+	if size < 1 {
+		size = 256
+	}
+	subscription := &audioSubscription{channel: make(chan AudioPacket, size), reliable: reliable, done: make(chan struct{})}
+	h.mu.Lock()
+	if h.closed {
+		close(subscription.done)
+	} else {
+		h.audioSubs[subscription] = struct{}{}
+	}
+	h.mu.Unlock()
+	return subscription.channel, func() {
+		subscription.once.Do(func() {
+			close(subscription.done)
+			h.mu.Lock()
+			delete(h.audioSubs, subscription)
 			h.mu.Unlock()
 		})
 	}
@@ -311,7 +423,11 @@ func (h *Hub) Close() {
 	for subscription := range h.auSubs {
 		subscription.once.Do(func() { close(subscription.done) })
 	}
+	for subscription := range h.audioSubs {
+		subscription.once.Do(func() { close(subscription.done) })
+	}
 	h.rtpSubs = nil
 	h.auSubs = nil
+	h.audioSubs = nil
 	h.mu.Unlock()
 }

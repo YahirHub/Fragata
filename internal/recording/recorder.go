@@ -49,6 +49,8 @@ func (r *Recorder) Run(ctx context.Context) error {
 	// finalization runs separately so Sync/Close never blocks incoming video.
 	accessUnits, unsubscribe := r.Hub.SubscribeAccessUnitsReliable(2048)
 	defer unsubscribe()
+	audioPackets, unsubscribeAudio := r.Hub.SubscribeAudioReliable(4096)
+	defer unsubscribeAudio()
 
 	finalizeQueue := make(chan finalizeRequest, 8)
 	finalizerDone := make(chan struct{})
@@ -104,7 +106,7 @@ func (r *Recorder) Run(ctx context.Context) error {
 				if !au.KeyFrame || !ready(info) {
 					continue
 				}
-				seg, err := r.start(info, au.Generation)
+				seg, err := r.start(info, r.Hub.AudioInfo(), au.Generation)
 				if err != nil {
 					r.report(err)
 					continue
@@ -124,7 +126,7 @@ func (r *Recorder) Run(ctx context.Context) error {
 				// Open and write the next segment before closing the previous one.
 				// The boundary keyframe belongs to the new file, so both files remain
 				// independently decodable without dropping an access unit.
-				next, err := r.start(info, au.Generation)
+				next, err := r.start(info, r.Hub.AudioInfo(), au.Generation)
 				if err == nil {
 					err = next.writer.WriteAccessUnit(au)
 				}
@@ -147,6 +149,27 @@ func (r *Recorder) Run(ctx context.Context) error {
 				r.report(fmt.Errorf("escribir MKV: %w", err))
 				_ = current.preservePartial()
 				current = nil
+			}
+		case audio, ok := <-audioPackets:
+			if !ok {
+				audioPackets = nil
+				continue
+			}
+			if audio.Discontinuity {
+				if current != nil && (audio.Generation == 0 || current.generation == audio.Generation) {
+					finalizeQueue <- finalizeRequest{segment: current, endedAt: time.Now()}
+					current = nil
+				}
+				continue
+			}
+			if current == nil {
+				continue
+			}
+			if audio.Generation != 0 && current.generation != 0 && audio.Generation != current.generation {
+				continue
+			}
+			if err := current.writer.WriteAudio(audio); err != nil {
+				r.report(fmt.Errorf("escribir audio MKV: %w", err))
 			}
 		}
 	}
@@ -174,7 +197,7 @@ func ready(info stream.Info) bool {
 	return false
 }
 
-func (r *Recorder) start(info stream.Info, generation uint64) (*segment, error) {
+func (r *Recorder) start(info stream.Info, audioInfo stream.AudioInfo, generation uint64) (*segment, error) {
 	now := time.Now()
 	folder := r.StorageFolder
 	if strings.TrimSpace(folder) == "" {
@@ -206,7 +229,7 @@ func (r *Recorder) start(info stream.Info, generation uint64) (*segment, error) 
 	if file == nil {
 		return nil, errors.New("no se pudo generar un nombre único para la grabación")
 	}
-	writer, err := matroska.New(file, info)
+	writer, err := matroska.NewWithAudio(file, info, audioInfo)
 	if err != nil {
 		_ = file.Close()
 		_ = os.Remove(partial)

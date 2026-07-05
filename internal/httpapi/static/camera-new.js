@@ -15,7 +15,16 @@
     data.record = false;
     data.segment_duration_seconds = q('#newCameraSegmentDuration').valueSeconds;
     data.upload = form.elements.upload.checked;
+    data.sftp_profile_id = q('#sftpProfile').value;
     return data;
+  }
+
+  async function loadSFTPProfiles() {
+    const profiles = await api('/api/sftp-profiles');
+    const select = q('#sftpProfile');
+    select.innerHTML = '<option value="">Sin servidor seleccionado</option>' + profiles.filter((profile) => profile.enabled).map((profile) => `<option value="${esc(profile.id)}">${esc(profile.name)} · ${esc(profile.host)}:${profile.port}</option>`).join('');
+    q('#uploadSwitch').disabled = profiles.filter((profile) => profile.enabled).length === 0;
+    if (q('#uploadSwitch').disabled) q('#uploadSwitch').checked = false;
   }
 
   function setStatus(message, type = 'light') {
@@ -90,6 +99,13 @@
     finally { button.disabled = false; button.innerHTML = '<i class="bi bi-radar me-2"></i>Detectar en red'; }
   });
 
+  q('#uploadSwitch').addEventListener('change', (event) => {
+    if (event.currentTarget.checked && !q('#sftpProfile').value) {
+      event.currentTarget.checked = false;
+      notify('Selecciona primero un servidor SFTP global.', 'warning');
+    }
+  });
+
   q('#cameraForm').addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -110,6 +126,7 @@
   async function init() {
     const session = await initLayout('Registro y detección inteligente de dispositivos');
     q('#newCameraSegmentDuration').valueSeconds = session.default_segment_duration_seconds || 300;
+    await loadSFTPProfiles();
   }
   init().catch((error) => setStatus(error.message, 'danger'));
 })();

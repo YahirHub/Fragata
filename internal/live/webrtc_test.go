@@ -40,3 +40,23 @@ func TestAnnexBAccessUnitDoesNotDuplicateParameters(t *testing.T) {
 		t.Fatalf("PPS duplicated: %x", got)
 	}
 }
+
+func TestNewReservesSeparateVideoAndAudioPeers(t *testing.T) {
+	manager := New(nil, 3)
+	if manager.maxPeers != 6 {
+		t.Fatalf("maxPeers = %d, want 6", manager.maxPeers)
+	}
+}
+
+func TestWebRTCAudioCapability(t *testing.T) {
+	capability, ok := webRTCAudioCapability(stream.AudioInfo{Codec: "PCMU", SampleRate: 8000, Channels: 1})
+	if !ok {
+		t.Fatal("expected PCMU to be supported")
+	}
+	if capability.ClockRate != 8000 {
+		t.Fatalf("clock rate = %d, want 8000", capability.ClockRate)
+	}
+	if _, ok := webRTCAudioCapability(stream.AudioInfo{Codec: "AAC", SampleRate: 48000, Channels: 2}); ok {
+		t.Fatal("AAC must be converted before WebRTC")
+	}
+}

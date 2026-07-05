@@ -22,6 +22,9 @@ type Config struct {
 	ListenAddress        string
 	DataDir              string
 	RecordingsDir        string
+	LogPath              string
+	LogMaxSize           int64
+	RetentionInterval    time.Duration
 	SegmentDuration      time.Duration
 	ShutdownTimeout      time.Duration
 	SessionDuration      time.Duration
@@ -70,6 +73,9 @@ func Load(dotenvPath string) (Config, error) {
 		ListenAddress:        env("FRAGATA_LISTEN", ":8080"),
 		DataDir:              dataDir,
 		RecordingsDir:        env("FRAGATA_RECORDINGS_DIR", filepath.Join(dataDir, "recordings")),
+		LogPath:              env("FRAGATA_LOG_PATH", filepath.Join(dataDir, "logs.txt")),
+		LogMaxSize:           1 << 20,
+		RetentionInterval:    envDuration("FRAGATA_RETENTION_INTERVAL", 6*time.Hour),
 		SegmentDuration:      envDuration("FRAGATA_SEGMENT_DURATION", 5*time.Minute),
 		ShutdownTimeout:      envDuration("FRAGATA_SHUTDOWN_TIMEOUT", 20*time.Second),
 		SessionDuration:      envDuration("FRAGATA_SESSION_DURATION", 30*24*time.Hour),
@@ -113,6 +119,9 @@ func Load(dotenvPath string) (Config, error) {
 	}
 	if cfg.SegmentDuration < time.Duration(model.MinSegmentDurationSeconds)*time.Second || cfg.SegmentDuration > time.Duration(model.MaxSegmentDurationSeconds)*time.Second {
 		return Config{}, fmt.Errorf("FRAGATA_SEGMENT_DURATION debe estar entre %dm y %dh", model.MinSegmentDurationSeconds/60, model.MaxSegmentDurationSeconds/3600)
+	}
+	if cfg.RetentionInterval < time.Minute || cfg.RetentionInterval > 7*24*time.Hour {
+		return Config{}, errors.New("FRAGATA_RETENTION_INTERVAL debe estar entre 1m y 168h")
 	}
 	if cfg.MaxViewers < 1 || cfg.MaxViewers > 256 {
 		return Config{}, errors.New("FRAGATA_MAX_VIEWERS debe estar entre 1 y 256")

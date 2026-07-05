@@ -1,8 +1,15 @@
 (() => {
-  const { q, qa, api, initLayout, slugFolder, notify } = window.Fragata;
+  const { q, qa, api, initLayout, slugFolder, notify, escapeHTML: esc } = window.Fragata;
   const segments = location.pathname.split('/').filter(Boolean);
   const cameraID = decodeURIComponent(segments.at(-2) || '');
   let camera = null;
+  let sftpProfiles = [];
+
+  async function loadSFTPProfiles() {
+    sftpProfiles = await api('/api/sftp-profiles');
+    const select = q('#sftpProfile');
+    select.innerHTML = '<option value="">Sin servidor seleccionado</option>' + sftpProfiles.filter((profile) => profile.enabled).map((profile) => `<option value="${esc(profile.id)}">${esc(profile.name)} · ${esc(profile.host)}:${profile.port}</option>`).join('');
+  }
 
   function setConnectionStatus(message, type = 'light') {
     const element = q('#connectionStatus');
@@ -26,6 +33,7 @@
     q('#cameraRTSP').value = camera.rtsp_url || '';
     q('#recordSwitch').checked = camera.record;
     q('#uploadSwitch').checked = camera.upload;
+    q('#sftpProfile').value = camera.sftp_profile_id || '';
     q('#segmentDurationPicker').valueSeconds = camera.segment_duration_seconds || 300;
     q('#passwordState').textContent = camera.has_password ? 'Hay una contraseña cifrada configurada. Déjala vacía para conservarla.' : 'No hay una contraseña almacenada para esta cámara.';
     q('#deviceManufacturer').textContent = camera.manufacturer || 'No identificado';
@@ -34,6 +42,7 @@
     q('#deviceFirmware').textContent = camera.firmware_version || 'No disponible';
     q('#deviceStream').textContent = `${camera.codec || '—'}${camera.width && camera.height ? ` · ${camera.width}×${camera.height}` : ''}`;
     q('#deviceLiveStream').textContent = `${camera.live_codec || camera.codec || '—'}${camera.live_width && camera.live_height ? ` · ${camera.live_width}×${camera.live_height}` : ''}`;
+    q('#deviceAudio').textContent = camera.audio_codec ? `${camera.audio_codec} · ${camera.audio_sample_rate || '—'} Hz` : 'No detectado';
     q('fragata-app-layout')?.setSubtitle(`${camera.name} · Configuración`);
   }
 
@@ -47,6 +56,7 @@
       rtsp_url: q('#cameraRTSP').value.trim(),
       record: q('#recordSwitch').checked,
       upload: q('#uploadSwitch').checked,
+      sftp_profile_id: q('#sftpProfile').value,
       segment_duration_seconds: q('#segmentDurationPicker').valueSeconds,
     };
     const password = q('#cameraPassword').value;
@@ -61,6 +71,13 @@
     button.innerHTML = `<i class="bi ${visible ? 'bi-eye' : 'bi-eye-slash'}"></i>`;
   }));
   q('#cameraFolder').addEventListener('blur', (event) => { event.currentTarget.value = slugFolder(event.currentTarget.value || q('#cameraName').value); });
+
+  q('#uploadSwitch').addEventListener('change', (event) => {
+    if (event.currentTarget.checked && !q('#sftpProfile').value) {
+      event.currentTarget.checked = false;
+      notify('Selecciona primero un servidor SFTP global.', 'warning');
+    }
+  });
 
   q('#testConnectionButton').addEventListener('click', async (event) => {
     const button = event.currentTarget;
@@ -114,6 +131,7 @@
 
   async function init() {
     await initLayout('Configuración avanzada del dispositivo');
+    await loadSFTPProfiles();
     populate(await api(`/api/cameras/${encodeURIComponent(cameraID)}`));
   }
   init().catch((error) => { q('#saveStatus').textContent = error.message; notify(error.message, 'danger'); });

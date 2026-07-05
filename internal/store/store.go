@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,14 +27,21 @@ type Store struct {
 }
 
 type diskState struct {
-	Version     int                        `json:"version"`
-	Cameras     map[string]encryptedCamera `json:"cameras"`
-	Sessions    map[string]model.Session   `json:"sessions"`
-	UploadQueue map[string]model.UploadJob `json:"upload_queue"`
+	Version      int                             `json:"version"`
+	Cameras      map[string]encryptedCamera      `json:"cameras"`
+	Sessions     map[string]model.Session        `json:"sessions"`
+	UploadQueue  map[string]model.UploadJob      `json:"upload_queue"`
+	SFTPProfiles map[string]encryptedSFTPProfile `json:"sftp_profiles"`
+	Retention    model.RetentionPolicy           `json:"retention"`
 }
 
 type encryptedCamera struct {
 	model.Camera
+	PasswordCipher string `json:"password_cipher,omitempty"`
+}
+
+type encryptedSFTPProfile struct {
+	model.SFTPProfile
 	PasswordCipher string `json:"password_cipher,omitempty"`
 }
 
@@ -45,7 +53,7 @@ func Open(path string, key []byte) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{path: path, key: append([]byte(nil), key...)}
-	s.data = model.State{Version: 1, Cameras: map[string]model.Camera{}, Sessions: map[string]model.Session{}, UploadQueue: map[string]model.UploadJob{}}
+	s.data = model.State{Version: 2, Cameras: map[string]model.Camera{}, Sessions: map[string]model.Session{}, UploadQueue: map[string]model.UploadJob{}, SFTPProfiles: map[string]model.SFTPProfile{}, Retention: model.RetentionPolicy{Value: 30, Unit: "days"}}
 	if err := s.load(); err != nil {
 		return nil, err
 	}
@@ -73,9 +81,15 @@ func (s *Store) load() error {
 	if d.UploadQueue == nil {
 		d.UploadQueue = map[string]model.UploadJob{}
 	}
-	state := model.State{Version: d.Version, Cameras: map[string]model.Camera{}, Sessions: d.Sessions, UploadQueue: d.UploadQueue}
-	if state.Version == 0 {
-		state.Version = 1
+	if d.SFTPProfiles == nil {
+		d.SFTPProfiles = map[string]encryptedSFTPProfile{}
+	}
+	state := model.State{Version: d.Version, Cameras: map[string]model.Camera{}, Sessions: d.Sessions, UploadQueue: d.UploadQueue, SFTPProfiles: map[string]model.SFTPProfile{}, Retention: d.Retention}
+	if state.Version < 2 {
+		state.Version = 2
+	}
+	if state.Retention.Value < 1 || (state.Retention.Unit != "days" && state.Retention.Unit != "months" && state.Retention.Unit != "years") {
+		state.Retention = model.RetentionPolicy{Value: 30, Unit: "days"}
 	}
 	for id, ec := range d.Cameras {
 		c := ec.Camera
@@ -87,6 +101,17 @@ func (s *Store) load() error {
 			c.Password = plain
 		}
 		state.Cameras[id] = c
+	}
+	for id, encrypted := range d.SFTPProfiles {
+		profile := encrypted.SFTPProfile
+		if encrypted.PasswordCipher != "" {
+			plain, err := s.decrypt(encrypted.PasswordCipher)
+			if err != nil {
+				return fmt.Errorf("descifrar perfil SFTP %s: %w", id, err)
+			}
+			profile.Password = plain
+		}
+		state.SFTPProfiles[id] = profile
 	}
 	s.data = state
 	return nil
@@ -243,8 +268,74 @@ func (s *Store) UploadJobs() []model.UploadJob {
 	return out
 }
 
+func (s *Store) SFTPProfiles() []model.SFTPProfile {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]model.SFTPProfile, 0, len(s.data.SFTPProfiles))
+	for _, profile := range s.data.SFTPProfiles {
+		out = append(out, profile)
+	}
+	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name) })
+	return out
+}
+
+func (s *Store) SFTPProfile(id string) (model.SFTPProfile, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	profile, ok := s.data.SFTPProfiles[id]
+	return profile, ok
+}
+
+func (s *Store) SaveSFTPProfile(profile model.SFTPProfile) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous, existed := s.data.SFTPProfiles[profile.ID]
+	s.data.SFTPProfiles[profile.ID] = profile
+	if err := s.persistLocked(); err != nil {
+		if existed {
+			s.data.SFTPProfiles[profile.ID] = previous
+		} else {
+			delete(s.data.SFTPProfiles, profile.ID)
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Store) DeleteSFTPProfile(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous, existed := s.data.SFTPProfiles[id]
+	delete(s.data.SFTPProfiles, id)
+	if err := s.persistLocked(); err != nil {
+		if existed {
+			s.data.SFTPProfiles[id] = previous
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Store) Retention() model.RetentionPolicy {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.data.Retention
+}
+
+func (s *Store) SaveRetention(policy model.RetentionPolicy) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := s.data.Retention
+	s.data.Retention = policy
+	if err := s.persistLocked(); err != nil {
+		s.data.Retention = previous
+		return err
+	}
+	return nil
+}
+
 func (s *Store) persistLocked() error {
-	d := diskState{Version: s.data.Version, Cameras: map[string]encryptedCamera{}, Sessions: s.data.Sessions, UploadQueue: s.data.UploadQueue}
+	d := diskState{Version: s.data.Version, Cameras: map[string]encryptedCamera{}, Sessions: s.data.Sessions, UploadQueue: s.data.UploadQueue, SFTPProfiles: map[string]encryptedSFTPProfile{}, Retention: s.data.Retention}
 	for id, c := range s.data.Cameras {
 		ec := encryptedCamera{Camera: c}
 		ec.Password = ""
@@ -256,6 +347,18 @@ func (s *Store) persistLocked() error {
 			ec.PasswordCipher = enc
 		}
 		d.Cameras[id] = ec
+	}
+	for id, profile := range s.data.SFTPProfiles {
+		encrypted := encryptedSFTPProfile{SFTPProfile: profile}
+		encrypted.Password = ""
+		if profile.Password != "" {
+			value, err := s.encrypt(profile.Password)
+			if err != nil {
+				return err
+			}
+			encrypted.PasswordCipher = value
+		}
+		d.SFTPProfiles[id] = encrypted
 	}
 	b, err := json.MarshalIndent(d, "", "  ")
 	if err != nil {

@@ -69,6 +69,9 @@ func (m *Manager) Close() {
 
 func (m *Manager) Add(cam model.Camera) (model.Camera, error) {
 	cam = m.normalizeCamera(cam)
+	if cam.Upload && (m.uploader == nil || !m.uploader.Enabled(cam.SFTPProfileID)) {
+		return model.Camera{}, errors.New("seleccione un servidor SFTP habilitado antes de activar las subidas")
+	}
 	id, err := randomID()
 	if err != nil {
 		return model.Camera{}, err
@@ -185,10 +188,11 @@ func (m *Manager) Redetect(ctx context.Context, id string) (DetectionResult, err
 	}
 	current = m.normalizeCamera(current)
 	enabled, record, upload := current.Enabled, current.Record, current.Upload
+	sftpProfileID := current.SFTPProfileID
 	segmentDurationSeconds := current.SegmentDurationSeconds
 	detected, err := Detect(ctx, m.cfg, AddRequest{
 		Name: current.Name, Host: current.Host, Username: current.Username, Password: current.Password,
-		Enabled: &enabled, Record: &record, Upload: &upload,
+		Enabled: &enabled, Record: &record, Upload: &upload, SFTPProfileID: sftpProfileID,
 	})
 	if err != nil {
 		return DetectionResult{}, err
@@ -198,6 +202,7 @@ func (m *Manager) Redetect(ctx context.Context, id string) (DetectionResult, err
 	updated.CreatedAt = current.CreatedAt
 	updated.SegmentDurationSeconds = segmentDurationSeconds
 	updated.FolderName = current.FolderName
+	updated.SFTPProfileID = current.SFTPProfileID
 	updated.UpdatedAt = time.Now().UTC()
 	if err := m.store.SaveCamera(updated); err != nil {
 		return DetectionResult{}, err
@@ -225,6 +230,23 @@ func (m *Manager) LiveHub(ctx context.Context, id string) (*stream.Hub, string, 
 		return nil, "", errors.New("cámara no encontrada o deshabilitada")
 	}
 	return w.ensureLive(ctx)
+}
+
+func (m *Manager) LiveAudioHub(ctx context.Context, id string) (*stream.Hub, string, error) {
+	m.mu.RLock()
+	w, ok := m.workers[id]
+	m.mu.RUnlock()
+	if !ok {
+		return nil, "", errors.New("cámara no encontrada o deshabilitada")
+	}
+	hub, mode, err := w.ensureLive(ctx)
+	if err != nil {
+		return nil, mode, err
+	}
+	if err := w.ensureLiveAudio(ctx, hub); err != nil {
+		return nil, mode, err
+	}
+	return hub, mode, nil
 }
 
 func (m *Manager) Statuses() []model.RuntimeStatus {
@@ -304,8 +326,12 @@ type worker struct {
 	segmentDuration atomic.Int64
 	liveMu          sync.Mutex
 	liveHub         *stream.Hub
+	liveContext     context.Context
 	liveCancel      context.CancelFunc
 	liveDone        chan struct{}
+	liveAudioCancel context.CancelFunc
+	liveAudioDone   chan struct{}
+	liveAudioError  string
 	liveStarted     bool
 	liveMode        string
 	liveError       string
@@ -420,10 +446,10 @@ func (w *worker) startRecorder() {
 						status.RecordingStarted = time.Time{}
 					}
 				})
-				if w.cam.Upload && w.uploader != nil && w.uploader.Enabled() {
+				if w.cam.Upload && w.uploader != nil && w.uploader.Enabled(w.cam.SFTPProfileID) {
 					relative, err := filepath.Rel(w.cfg.RecordingsDir, file.Path)
 					if err == nil {
-						if err := w.uploader.Enqueue(w.cam.ID, file.Path, relative); err != nil {
+						if err := w.uploader.Enqueue(w.cam.ID, w.cam.SFTPProfileID, file.Path, relative); err != nil {
 							w.setError(err)
 						}
 					}
@@ -496,6 +522,7 @@ func (w *worker) ensureLive(ctx context.Context) (*stream.Hub, string, error) {
 		}
 		liveCtx, cancel := context.WithCancel(w.ctx)
 		w.liveHub = stream.NewHub()
+		w.liveContext = liveCtx
 		w.liveCancel = cancel
 		done := make(chan struct{})
 		w.liveDone = done
@@ -542,6 +569,7 @@ func (w *worker) runLive(ctx context.Context, initialMode string, hub *stream.Hu
 		var err error
 		switch mode {
 		case "ffmpeg":
+			stopAudioBridge := w.bridgeLiveAudio(ctx, hub)
 			raw, credentialErr := fragrtsp.WithCredentials(w.cam.RTSPURL, w.cam.Username, w.cam.Password)
 			if credentialErr != nil {
 				err = credentialErr
@@ -550,6 +578,7 @@ func (w *worker) runLive(ctx context.Context, initialMode string, hub *stream.Hu
 					Path: w.cfg.FFmpegPath, URL: raw, Width: w.cam.Width, Height: w.cam.Height, Hub: hub, NoPacketTimeout: 10 * time.Second,
 				}).Run(ctx)
 			}
+			stopAudioBridge()
 			if err != nil && strings.EqualFold(w.cam.Codec, "H264") {
 				w.logger.Warn("FFmpeg live view failed; using direct H264 stream", "camera_id", w.cam.ID, "error", model.RedactSecrets(err.Error()))
 				mode = "direct"
@@ -583,6 +612,7 @@ func (w *worker) runLive(ctx context.Context, initialMode string, hub *stream.Hu
 		default:
 			err = errors.New("modo de vista en vivo inválido")
 		}
+		w.stopLiveAudioProcess()
 		if ctx.Err() != nil {
 			return
 		}
@@ -597,6 +627,158 @@ func (w *worker) runLive(ctx context.Context, initialMode string, hub *stream.Hu
 			if backoff > 30*time.Second {
 				backoff = 30 * time.Second
 			}
+		}
+	}
+}
+
+func (w *worker) bridgeLiveAudio(ctx context.Context, destination *stream.Hub) func() {
+	bridgeCtx, cancel := context.WithCancel(ctx)
+	packets, unsubscribe := w.hub.SubscribeAudio(512)
+	go func() {
+		defer unsubscribe()
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-bridgeCtx.Done():
+				return
+			case <-ticker.C:
+				// FFmpeg inicia una nueva generación de video y limpia el hub.
+				// Solo se replica audio que WebRTC puede enviar sin convertir.
+				if info := w.hub.AudioInfo(); browserAudioReady(info) {
+					destination.SetAudioInfo(info)
+				}
+			case packet, ok := <-packets:
+				if !ok {
+					return
+				}
+				info := w.hub.AudioInfo()
+				if !browserAudioReady(info) {
+					continue
+				}
+				destination.SetAudioInfo(info)
+				destination.PublishAudio(packet)
+			}
+		}
+	}()
+	return cancel
+}
+
+func (w *worker) ensureLiveAudio(ctx context.Context, destination *stream.Hub) error {
+	if browserAudioReady(destination.AudioInfo()) {
+		return nil
+	}
+	sourceAudio := w.hub.AudioInfo()
+	if sourceAudio.Codec == "" {
+		return errors.New("la cámara no ofrece una pista de audio compatible")
+	}
+	if browserAudioReady(sourceAudio) {
+		deadline := time.NewTimer(2 * time.Second)
+		defer deadline.Stop()
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if browserAudioReady(destination.AudioInfo()) {
+				return nil
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-deadline.C:
+				return errors.New("el audio de la cámara todavía no está disponible")
+			case <-ticker.C:
+			}
+		}
+	}
+	if sourceAudio.Codec != "AAC" {
+		return errors.New("el codec de audio no es compatible con el navegador")
+	}
+	if w.cfg.FFmpegPath == "" {
+		return errors.New("el audio AAC requiere FFmpeg para reproducirse en el navegador")
+	}
+
+	w.liveMu.Lock()
+	if w.liveContext == nil || w.liveHub != destination {
+		w.liveMu.Unlock()
+		return errors.New("la vista en vivo se reinició")
+	}
+	if w.liveAudioDone == nil {
+		raw, err := fragrtsp.WithCredentials(w.cam.RTSPURL, w.cam.Username, w.cam.Password)
+		if err != nil {
+			w.liveMu.Unlock()
+			return err
+		}
+		audioCtx, cancel := context.WithCancel(w.liveContext)
+		done := make(chan struct{})
+		w.liveAudioCancel = cancel
+		w.liveAudioDone = done
+		w.liveAudioError = ""
+		go w.runAACLiveAudio(audioCtx, raw, destination, done)
+	}
+	done := w.liveAudioDone
+	w.liveLastRequest = time.Now()
+	w.liveMu.Unlock()
+
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if browserAudioReady(destination.AudioInfo()) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-done:
+			w.liveMu.Lock()
+			message := w.liveAudioError
+			w.liveMu.Unlock()
+			if message == "" {
+				message = "el audio terminó antes de quedar disponible"
+			}
+			return errors.New(message)
+		case <-ticker.C:
+		}
+	}
+}
+
+func (w *worker) runAACLiveAudio(ctx context.Context, rawURL string, destination *stream.Hub, done chan struct{}) {
+	err := (transcode.FFmpegAudioSource{
+		Path: w.cfg.FFmpegPath, URL: rawURL, Hub: destination, NoPacketTimeout: 15 * time.Second,
+	}).Run(ctx)
+	message := ""
+	if err != nil && !errors.Is(err, context.Canceled) {
+		message = model.RedactSecrets(err.Error())
+		w.logger.Warn("FFmpeg audio unavailable; video remains active", "camera_id", w.cam.ID, "error", message)
+	}
+	w.liveMu.Lock()
+	if w.liveAudioDone == done {
+		w.liveAudioCancel = nil
+		w.liveAudioDone = nil
+		w.liveAudioError = message
+	}
+	w.liveMu.Unlock()
+	close(done)
+}
+
+func browserAudioReady(info stream.AudioInfo) bool {
+	return info.Codec == "PCMA" || info.Codec == "PCMU" || info.Codec == "OPUS"
+}
+
+func (w *worker) stopLiveAudioProcess() {
+	w.liveMu.Lock()
+	cancel := w.liveAudioCancel
+	done := w.liveAudioDone
+	w.liveAudioCancel = nil
+	w.liveAudioDone = nil
+	w.liveAudioError = ""
+	w.liveMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
 		}
 	}
 }
@@ -669,9 +851,16 @@ func (w *worker) watchLiveIdle(ctx context.Context, cancel context.CancelFunc, h
 }
 
 func (w *worker) resetLiveLocked() {
+	if w.liveAudioCancel != nil {
+		w.liveAudioCancel()
+	}
 	w.liveHub = nil
+	w.liveContext = nil
 	w.liveCancel = nil
 	w.liveDone = nil
+	w.liveAudioCancel = nil
+	w.liveAudioDone = nil
+	w.liveAudioError = ""
 	w.liveStarted = false
 	w.liveMode = ""
 	w.liveError = ""
@@ -735,6 +924,10 @@ func (w *worker) statusSnapshot() model.RuntimeStatus {
 	out := w.status
 	w.mu.RUnlock()
 	out.Viewers = w.hub.ViewerCount()
+	audio := w.hub.AudioInfo()
+	out.AudioCodec = audio.Codec
+	out.AudioSampleRate = audio.SampleRate
+	out.AudioChannels = audio.Channels
 	w.liveMu.Lock()
 	if w.liveHub != nil {
 		out.Viewers = w.liveHub.ViewerCount()

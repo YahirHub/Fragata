@@ -17,7 +17,9 @@ import (
 	"fragata/internal/config"
 	"fragata/internal/httpapi"
 	"fragata/internal/live"
+	"fragata/internal/logging"
 	"fragata/internal/recording"
+	"fragata/internal/retention"
 	"fragata/internal/store"
 	"fragata/internal/upload"
 )
@@ -41,20 +43,27 @@ func main() {
 		return
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	bootstrapLogger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	cfg, err := config.Load(*envPath)
 	if err != nil {
-		logger.Error("configuration error", "error", err)
+		bootstrapLogger.Error("configuration error", "error", err)
 		os.Exit(1)
 	}
+	logWriter, err := logging.Open(cfg.LogPath, cfg.LogMaxSize)
+	if err != nil {
+		bootstrapLogger.Error("log file error", "error", err)
+		os.Exit(1)
+	}
+	defer logWriter.Close()
+	logger := slog.New(slog.NewTextHandler(logging.MultiOutput(logWriter), &slog.HandlerOptions{Level: slog.LevelInfo}))
 	if err := os.MkdirAll(cfg.RecordingsDir, 0o750); err != nil {
 		logger.Error("recordings directory error", "error", err)
 		os.Exit(1)
 	}
 	if cfg.FFmpegPath != "" {
-		logger.Info("FFmpeg detected for H265 live view", "path", cfg.FFmpegPath)
+		logger.Info("FFmpeg detected for browser-compatible live view", "path", cfg.FFmpegPath)
 	} else {
-		logger.Info("FFmpeg not detected; H265 live view will use an H264 substream when available")
+		logger.Info("FFmpeg not detected; live view will use native WebRTC-compatible streams when available")
 	}
 	if recovered, err := recording.RecoverPartials(cfg.RecordingsDir); err != nil {
 		logger.Warn("partial recording recovery failed", "error", err)
@@ -73,7 +82,7 @@ func main() {
 	uploader := upload.New(cfg.SFTP, state, func(err error) { logger.Warn("upload error", "error", err) })
 	cameraManager := camera.NewManager(cfg, state, uploader, logger)
 	liveManager := live.New(cfg.STUNServers, cfg.MaxViewers)
-	api, err := httpapi.New(cfg, authManager, cameraManager, liveManager, state, logger)
+	api, err := httpapi.New(cfg, authManager, cameraManager, liveManager, uploader, state, logger)
 	if err != nil {
 		logger.Error("HTTP server initialization error", "error", err)
 		os.Exit(1)
@@ -83,6 +92,7 @@ func main() {
 	defer stop()
 	cameraManager.Start()
 	go uploader.Run(ctx)
+	go (retention.Cleaner{BaseDir: cfg.RecordingsDir, Store: state, Logger: logger, Interval: cfg.RetentionInterval}).Run(ctx)
 	go pruneSessions(ctx, state, logger)
 
 	serverErr := make(chan error, 1)
