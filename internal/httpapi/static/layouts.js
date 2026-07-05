@@ -1,4 +1,7 @@
 (() => {
+  const SIDEBAR_STORAGE_KEY = 'fragata.sidebar.hidden';
+  const desktopMedia = window.matchMedia('(min-width: 992px)');
+
   const navItems = [
     { key: 'dashboard', href: '/', icon: 'bi-speedometer2', label: 'Dashboard' },
     { key: 'cameras', href: '/cameras', icon: 'bi-camera-video-fill', label: 'Cámaras' },
@@ -15,6 +18,40 @@
         <span>${item.label}</span>
       </a>
     `).join('');
+  }
+
+  function readSidebarHidden() {
+    try {
+      return localStorage.getItem(SIDEBAR_STORAGE_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  }
+
+  function writeSidebarHidden(value) {
+    try {
+      localStorage.setItem(SIDEBAR_STORAGE_KEY, String(Boolean(value)));
+    } catch {
+      // El control continúa funcionando aunque el navegador bloquee storage.
+    }
+  }
+
+  function updateThemeButton(button, theme) {
+    if (!button) return;
+    const dark = theme === 'dark';
+    const icon = button.querySelector('i');
+    const label = dark ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro';
+    if (icon) icon.className = `bi ${dark ? 'bi-sun-fill' : 'bi-moon-stars-fill'}`;
+    button.setAttribute('aria-label', label);
+    button.setAttribute('title', label);
+    button.setAttribute('aria-pressed', String(dark));
+  }
+
+  function bindThemeButton(button) {
+    if (!button || button.dataset.themeReady === 'true') return;
+    button.dataset.themeReady = 'true';
+    window.FragataTheme?.subscribe((theme) => updateThemeButton(button, theme));
+    button.addEventListener('click', () => window.FragataTheme?.toggle());
   }
 
   class FragataAppLayout extends HTMLElement {
@@ -48,19 +85,23 @@
                 <span class="brand-symbol"><i class="bi bi-camera-reels-fill"></i></span>
                 <span><strong>Fragata</strong><small>Servidor de cámaras</small></span>
               </a>
-              <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" aria-label="Cerrar"></button>
+              <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" aria-label="Cerrar menú"></button>
             </div>
             <div class="offcanvas-body">
               <div class="sidebar-section-label">Administración</div>
               <nav class="app-nav">${navMarkup(active, true)}</nav>
+              <div class="sidebar-mobile-status">
+                <span class="status-pulse"></span>
+                <span><strong>Servicio activo</strong><small>Monitoreo local</small></span>
+              </div>
             </div>
           </div>
 
           <div class="app-workspace">
             <header class="app-topbar">
-              <div class="d-flex align-items-center gap-3 min-w-0">
-                <button class="btn sidebar-toggle d-lg-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#fragataSidebar" aria-controls="fragataSidebar" aria-label="Abrir menú">
-                  <i class="bi bi-list"></i>
+              <div class="topbar-heading min-w-0">
+                <button id="layoutSidebarToggle" class="btn sidebar-toggle" type="button" aria-controls="fragataSidebar" aria-label="Ocultar menú lateral" title="Ocultar menú lateral">
+                  <i class="bi bi-layout-sidebar-inset" aria-hidden="true"></i>
                 </button>
                 <div class="page-title-wrap min-w-0">
                   <span class="page-title-icon"><i class="bi ${pageIcon}"></i></span>
@@ -70,6 +111,9 @@
               <div class="topbar-tools">
                 <span id="ffmpegBadge" class="badge rounded-pill bg-success-subtle border border-success-subtle text-success-emphasis hidden"><i class="bi bi-cpu me-1"></i>FFmpeg</span>
                 <span id="queueBadge" class="badge rounded-pill text-bg-light border"><i class="bi bi-cloud-arrow-up me-1"></i>0 subidas</span>
+                <button id="layoutThemeToggle" class="btn theme-toggle" type="button" aria-label="Cambiar a modo oscuro" title="Cambiar a modo oscuro" aria-pressed="false">
+                  <i class="bi bi-moon-stars-fill" aria-hidden="true"></i>
+                </button>
                 <div class="dropdown">
                   <button class="user-dropdown" type="button" data-bs-toggle="dropdown" aria-expanded="false">
                     <span class="user-avatar"><i class="bi bi-person-fill"></i></span>
@@ -87,7 +131,7 @@
 
             <main class="app-content">${content}</main>
             <footer class="app-footer">
-              <span>Fragata <strong>v0.8.1</strong></span>
+              <span>Fragata <strong>v0.8.2</strong></span>
               <span>Servidor NVR ligero · Go</span>
             </footer>
           </div>
@@ -95,9 +139,64 @@
         <div class="toast-container position-fixed bottom-0 end-0 p-3" id="fragataToasts" aria-live="polite" aria-atomic="true"></div>
       `;
 
+      this.bindSidebarToggle();
+      bindThemeButton(this.querySelector('#layoutThemeToggle'));
+
       this.querySelector('#layoutLogoutButton')?.addEventListener('click', () => {
         this.dispatchEvent(new CustomEvent('fragata-logout', { bubbles: true }));
       });
+    }
+
+    bindSidebarToggle() {
+      const button = this.querySelector('#layoutSidebarToggle');
+      const sidebar = this.querySelector('#fragataSidebar');
+      if (!button || !sidebar) return;
+
+      const updateButton = () => {
+        const desktop = desktopMedia.matches;
+        const hidden = document.documentElement.classList.contains('fragata-sidebar-hidden');
+        const label = desktop
+          ? (hidden ? 'Mostrar menú lateral' : 'Ocultar menú lateral')
+          : 'Abrir menú de navegación';
+        const icon = desktop
+          ? (hidden ? 'bi-layout-sidebar-inset-reverse' : 'bi-layout-sidebar-inset')
+          : 'bi-list';
+        button.setAttribute('aria-label', label);
+        button.setAttribute('title', label);
+        button.setAttribute('aria-expanded', desktop ? String(!hidden) : String(sidebar.classList.contains('show')));
+        const iconElement = button.querySelector('i');
+        if (iconElement) iconElement.className = `bi ${icon}`;
+      };
+
+      const closeMobileSidebar = () => {
+        if (!window.bootstrap?.Offcanvas) return;
+        window.bootstrap.Offcanvas.getInstance(sidebar)?.hide();
+      };
+
+      const syncViewport = () => {
+        if (desktopMedia.matches) closeMobileSidebar();
+        updateButton();
+      };
+
+      button.addEventListener('click', () => {
+        if (desktopMedia.matches) {
+          const hidden = !document.documentElement.classList.contains('fragata-sidebar-hidden');
+          document.documentElement.classList.toggle('fragata-sidebar-hidden', hidden);
+          writeSidebarHidden(hidden);
+          updateButton();
+          return;
+        }
+        if (!window.bootstrap?.Offcanvas) return;
+        window.bootstrap.Offcanvas.getOrCreateInstance(sidebar).toggle();
+      });
+
+      sidebar.addEventListener('shown.bs.offcanvas', updateButton);
+      sidebar.addEventListener('hidden.bs.offcanvas', updateButton);
+      desktopMedia.addEventListener?.('change', syncViewport);
+
+      const initialHidden = readSidebarHidden();
+      document.documentElement.classList.toggle('fragata-sidebar-hidden', initialHidden);
+      syncViewport();
     }
 
     setSession(session) {
@@ -141,15 +240,19 @@
             </div>
           </section>
           <section class="auth-panel">
+            <button id="authThemeToggle" class="btn theme-toggle auth-theme-toggle" type="button" aria-label="Cambiar a modo oscuro" title="Cambiar a modo oscuro" aria-pressed="false">
+              <i class="bi bi-moon-stars-fill" aria-hidden="true"></i>
+            </button>
             <div class="auth-mobile-brand d-lg-none">
               <span class="brand-symbol"><i class="bi bi-camera-reels-fill"></i></span>
               <span><strong>Fragata</strong><small>Servidor de cámaras</small></span>
             </div>
             <div class="auth-card">${content}</div>
-            <footer class="auth-footer">Fragata v0.8.1 · Servidor NVR ligero</footer>
+            <footer class="auth-footer">Fragata v0.8.2 · Servidor NVR ligero</footer>
           </section>
         </main>
       `;
+      bindThemeButton(this.querySelector('#authThemeToggle'));
     }
   }
 

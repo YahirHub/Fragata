@@ -569,3 +569,190 @@ fragata-app-layout:not([data-ready="true"]), fragata-auth-layout:not([data-ready
   .event-detail-list > div { grid-template-columns: 1fr; gap: .25rem; }
   .event-detail-list dd { text-align: left; }
 }
+
+/* Responsive shell controls and persisted appearance */
+body { overflow-x: hidden; }
+.app-sidebar { transition: transform .22s ease, visibility .22s ease; }
+.app-workspace { min-width: 0; transition: margin-left .22s ease; }
+.topbar-heading { display: flex; align-items: center; gap: .75rem; min-width: 0; }
+.sidebar-toggle,
+.theme-toggle {
+  width: 42px;
+  height: 42px;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid var(--fragata-border);
+  border-radius: 11px;
+  color: #3c4a65;
+  background: var(--fragata-surface);
+  transition: color .18s ease, background-color .18s ease, border-color .18s ease, transform .18s ease;
+}
+.sidebar-toggle:hover,
+.theme-toggle:hover { color: var(--fragata-primary); border-color: rgba(78,115,223,.38); background: rgba(78,115,223,.07); }
+.sidebar-toggle:active,
+.theme-toggle:active { transform: scale(.96); }
+.theme-toggle i { font-size: 1rem; }
+.sidebar-mobile-status {
+  display: flex;
+  align-items: center;
+  gap: .7rem;
+  margin: 1.25rem .45rem 0;
+  padding: .85rem;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 12px;
+  background: rgba(255,255,255,.035);
+}
+.sidebar-mobile-status > span:last-child { display: grid; line-height: 1.2; }
+.sidebar-mobile-status strong { color: rgba(255,255,255,.82); font-size: .76rem; }
+.sidebar-mobile-status small { color: rgba(255,255,255,.42); font-size: .68rem; }
+.auth-panel { position: relative; }
+.auth-theme-toggle { position: absolute; top: max(1rem, env(safe-area-inset-top)); right: max(1rem, env(safe-area-inset-right)); z-index: 2; }
+.app-offcanvas { height: 100dvh; }
+.app-offcanvas .offcanvas-body { display: flex; flex-direction: column; padding-bottom: max(1rem, env(safe-area-inset-bottom)); }
+.app-offcanvas .app-nav { flex: 0 0 auto; }
+.app-offcanvas .sidebar-mobile-status { margin-top: auto; }
+
+@media (min-width: 992px) {
+  html.fragata-sidebar-hidden .app-sidebar { transform: translateX(-100%); visibility: hidden; pointer-events: none; }
+  html.fragata-sidebar-hidden .app-workspace { margin-left: 0; }
+}
+
+@media (max-width: 991.98px) {
+  .app-offcanvas { --bs-offcanvas-width: min(320px, 88vw); }
+  .app-offcanvas .offcanvas-header { padding-top: max(1rem, env(safe-area-inset-top)); }
+  .app-topbar { padding-left: max(.85rem, env(safe-area-inset-left)); padding-right: max(.85rem, env(safe-area-inset-right)); }
+  .sidebar-toggle { width: 44px; height: 44px; }
+}
+
+@media (max-width: 767.98px) {
+  .app-topbar { align-items: center; }
+  .topbar-heading { gap: .6rem; flex: 1 1 auto; overflow: hidden; }
+  .topbar-tools { flex: 0 0 auto; gap: .35rem; }
+  .theme-toggle { width: 40px; height: 40px; }
+  .user-dropdown { min-height: 40px; padding: .2rem; }
+  .user-avatar { width: 36px; height: 36px; }
+  .page-title-wrap h1 { max-width: min(42vw, 260px); }
+  .page-title-wrap span:last-child { display: block; max-width: min(42vw, 260px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .table-responsive { -webkit-overflow-scrolling: touch; }
+  .dropdown-menu { max-width: calc(100vw - 1.5rem); }
+}
+
+@media (max-width: 575.98px) {
+  .page-title-wrap h1 { max-width: 38vw; }
+  .page-title-wrap span:last-child { display: none; }
+  .topbar-tools .theme-toggle { display: inline-grid; }
+  .app-content .btn { min-height: 42px; }
+  .modal-dialog { margin: .5rem; }
+  .modal-content { max-height: calc(100dvh - 1rem); }
+}
+
+/* Dark mode. Bootstrap handles its own components; these rules cover the
+   custom Fragata surfaces and hard-coded light colors. */
+[data-bs-theme="dark"] {
+  --fragata-sidebar: #111827;
+  --fragata-sidebar-deep: #0b1120;
+  --fragata-surface: #161d2b;
+  --fragata-page: #0d1320;
+  --fragata-border: #2b3547;
+  --fragata-muted: #9aa7ba;
+  --bs-body-bg: #0d1320;
+  --bs-body-color: #d9e0ea;
+  --bs-secondary-bg: #1a2231;
+  --bs-tertiary-bg: #202a3a;
+  --bs-border-color: #2b3547;
+}
+[data-bs-theme="dark"] body { background: var(--fragata-page); color: #d9e0ea; }
+[data-bs-theme="dark"] .app-topbar { border-bottom-color: var(--fragata-border); background: rgba(22,29,43,.94); box-shadow: 0 3px 18px rgba(0,0,0,.22); }
+[data-bs-theme="dark"] .app-footer { border-top-color: var(--fragata-border); color: #8996aa; background: #121926; }
+[data-bs-theme="dark"] .sidebar-toggle,
+[data-bs-theme="dark"] .theme-toggle { color: #c3ccda; background: #1b2433; border-color: #344055; }
+[data-bs-theme="dark"] .sidebar-toggle:hover,
+[data-bs-theme="dark"] .theme-toggle:hover { color: #9db4ff; background: rgba(102,139,242,.13); border-color: rgba(141,168,255,.45); }
+[data-bs-theme="dark"] .page-title-wrap h1,
+[data-bs-theme="dark"] .page-heading h2,
+[data-bs-theme="dark"] .camera-content h3,
+[data-bs-theme="dark"] .stat-card strong,
+[data-bs-theme="dark"] .auth-card-heading h1 { color: #eef2f8; }
+[data-bs-theme="dark"] .page-title-wrap span:last-child,
+[data-bs-theme="dark"] .page-heading p,
+[data-bs-theme="dark"] .auth-card-heading p,
+[data-bs-theme="dark"] .auth-mobile-brand small,
+[data-bs-theme="dark"] .auth-footer { color: #929fb2; }
+[data-bs-theme="dark"] .user-dropdown { color: #d7deea; }
+[data-bs-theme="dark"] .user-dropdown:hover,
+[data-bs-theme="dark"] .user-dropdown[aria-expanded="true"] { border-color: var(--fragata-border); background: #1b2433; }
+[data-bs-theme="dark"] .user-copy small { color: #929fb2; }
+[data-bs-theme="dark"] .dropdown-menu { --bs-dropdown-bg: #1a2231; --bs-dropdown-link-hover-bg: #252f40; --bs-dropdown-border-color: #344055; }
+[data-bs-theme="dark"] .stat-card,
+[data-bs-theme="dark"] .camera-card,
+[data-bs-theme="dark"] .info-card,
+[data-bs-theme="dark"] .auth-card { border-color: var(--fragata-border); background: var(--fragata-surface); box-shadow: 0 .45rem 1.5rem rgba(0,0,0,.2); }
+[data-bs-theme="dark"] .dashboard-card { border-color: var(--fragata-border); box-shadow: 0 .45rem 1.5rem rgba(0,0,0,.18); }
+[data-bs-theme="dark"] .dashboard-card > .card-header { border-bottom-color: var(--fragata-border); }
+[data-bs-theme="dark"] .form-label,
+[data-bs-theme="dark"] .record-control strong,
+[data-bs-theme="dark"] .record-duration-row strong,
+[data-bs-theme="dark"] .system-check strong,
+[data-bs-theme="dark"] .setup-steps strong,
+[data-bs-theme="dark"] .device-details dd,
+[data-bs-theme="dark"] .event-detail-list dd,
+[data-bs-theme="dark"] .table-main,
+[data-bs-theme="dark"] .info-card strong { color: #d7deea; }
+[data-bs-theme="dark"] .form-control,
+[data-bs-theme="dark"] .form-select { border-color: #344055; background-color: #121926; color: #e6ebf2; }
+[data-bs-theme="dark"] .form-control::placeholder { color: #78869a; }
+[data-bs-theme="dark"] .input-group-text { border-color: #344055; color: #9ca9bb; background: #1c2534; }
+[data-bs-theme="dark"] .discovery-results,
+[data-bs-theme="dark"] .record-settings,
+[data-bs-theme="dark"] .camera-meta span,
+[data-bs-theme="dark"] .event-count-card { border-color: var(--fragata-border); background: #121a28; }
+[data-bs-theme="dark"] .device { border-bottom-color: var(--fragata-border); }
+[data-bs-theme="dark"] .port-state { border-color: #3a465a; color: #aab5c5; background: #182131; }
+[data-bs-theme="dark"] .camera-meta span,
+[data-bs-theme="dark"] .record-control small,
+[data-bs-theme="dark"] .record-duration-row small,
+[data-bs-theme="dark"] .event-count-card span,
+[data-bs-theme="dark"] .event-metrics,
+[data-bs-theme="dark"] .event-detail-list dt { color: #929fb2; }
+[data-bs-theme="dark"] .record-duration-row,
+[data-bs-theme="dark"] .system-check,
+[data-bs-theme="dark"] .device-details > div,
+[data-bs-theme="dark"] .event-detail-list > div { border-color: var(--fragata-border); }
+[data-bs-theme="dark"] .viewer-toolbar,
+[data-bs-theme="dark"] .viewer-controls { border-color: var(--fragata-border); background: var(--fragata-surface); }
+[data-bs-theme="dark"] .auth-layout { background: var(--fragata-page); }
+[data-bs-theme="dark"] .auth-panel { background: #0d1320; }
+[data-bs-theme="dark"] .dashboard-table thead th,
+[data-bs-theme="dark"] .camera-table thead th { color: #9ca8ba; background: #151d2b; }
+[data-bs-theme="dark"] .dashboard-table tbody td,
+[data-bs-theme="dark"] .camera-table tbody td { border-color: #283346; }
+[data-bs-theme="dark"] .dashboard-table tbody tr:hover,
+[data-bs-theme="dark"] .camera-table tbody tr:hover { background: #182130; }
+[data-bs-theme="dark"] .camera-cell strong { color: #dce3ed; }
+[data-bs-theme="dark"] .camera-cell small,
+[data-bs-theme="dark"] .table-sub,
+[data-bs-theme="dark"] .device-details dt,
+[data-bs-theme="dark"] .setup-steps small,
+[data-bs-theme="dark"] .system-check small,
+[data-bs-theme="dark"] .settings-check-list { color: #929fb2; }
+[data-bs-theme="dark"] .folder-code { border-color: #344055; color: #b8c3d2; background: #121a28; }
+[data-bs-theme="dark"] .action-menu-button { border-color: #344055; color: #aab5c5; background: #182131; }
+[data-bs-theme="dark"] .action-menu-button:hover,
+[data-bs-theme="dark"] .action-menu-button[aria-expanded="true"] { color: #9db4ff; border-color: rgba(141,168,255,.4); background: rgba(78,115,223,.12); }
+[data-bs-theme="dark"] .save-panel { border-color: rgba(141,168,255,.34); background: linear-gradient(180deg, #182131, #141c29); }
+[data-bs-theme="dark"] .event-preview-empty { color: #77869c; }
+[data-bs-theme="dark"] .modal-content { background: #161d2b; border-color: #344055; }
+[data-bs-theme="dark"] .btn-light { --bs-btn-bg: #202a3a; --bs-btn-border-color: #344055; --bs-btn-color: #dce3ed; --bs-btn-hover-bg: #293448; --bs-btn-hover-border-color: #43516a; --bs-btn-hover-color: #fff; }
+[data-bs-theme="dark"] .text-bg-light { color: #dce3ed !important; background-color: #202a3a !important; }
+[data-bs-theme="dark"] .camera-table th:last-child,
+[data-bs-theme="dark"] .camera-table td:last-child { background: var(--fragata-surface); box-shadow: -8px 0 12px rgba(0,0,0,.12); }
+[data-bs-theme="dark"] .camera-table thead th:last-child { background: #151d2b; }
+
+@media (prefers-reduced-motion: reduce) {
+  .app-sidebar,
+  .app-workspace,
+  .sidebar-toggle,
+  .theme-toggle { transition: none; }
+}

@@ -50,7 +50,7 @@ No incluido todavía:
 - Transcodificación general de codecs de audio distintos de G.711, Opus y AAC.
 - Entrada mediante protocolo SRT. Las cámaras ONVIF normalmente entregan la transmisión por RTSP; SRT se añadirá como transporte independiente.
 - Clasificación avanzada de mascotas, vehículos, rostros o personas pequeñas/ocultas mediante redes neuronales.
-- Reproducción histórica y línea de tiempo desde el panel.
+- Línea de tiempo global y navegación histórica continua entre segmentos desde el panel.
 
 ## Requisitos
 
@@ -116,7 +116,9 @@ La administración está separada en rutas claras:
 - `/settings/sftp`: servidores SFTP globales reutilizables.
 - `/settings/storage`: política de retención y estado del registro local.
 
-En escritorio, el sidebar permanece fijo a la izquierda. En pantallas pequeñas se convierte en un menú `offcanvas` accesible desde la barra superior. Las tablas conservan desplazamiento horizontal controlado y los formularios se reorganizan para teléfonos.
+En escritorio, el sidebar permanece fijo a la izquierda y puede ocultarse o mostrarse desde la barra superior; la preferencia queda guardada en el navegador. En teléfonos y tablets, el mismo botón abre un drawer `offcanvas` con overlay y cierre automático al elegir una sección. Las tablas conservan desplazamiento horizontal controlado, los formularios se reorganizan y los controles mantienen áreas táctiles adecuadas.
+
+La interfaz incluye modo claro y oscuro. En la primera visita adopta la preferencia del sistema operativo y, después de cambiarlo manualmente, conserva la selección en el navegador. El selector está disponible tanto en la barra superior como en la pantalla de acceso.
 
 Cuando el login está configurado, el dropdown muestra el usuario administrador y permite cerrar sesión. Si `FRAGATA_ADMIN_USER` o `FRAGATA_ADMIN_PASSWORD` están vacíos, muestra `Invitado` y señala que la autenticación está desactivada.
 

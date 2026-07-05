@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.2 - 2026-07-05
+
+- Añade un control unificado para ocultar o mostrar el sidebar en escritorio y abrir el drawer de navegación en teléfonos y tablets.
+- Conserva la preferencia del sidebar en el navegador y evita saltos visibles al cargar la interfaz.
+- Implementa modo oscuro completo, persistente y compatible con la preferencia del sistema operativo.
+- Añade un selector de tema en la barra superior y en la pantalla de inicio de sesión.
+- Mejora el comportamiento móvil del topbar, menús, modales, tablas y áreas táctiles.
+- Adapta tarjetas, formularios, tablas, visor, eventos, ajustes, dropdowns y modales al tema oscuro.
+- Respeta `prefers-reduced-motion` y actualiza el color del navegador según el tema activo.
+
 ## 0.8.1 - 2026-07-05
 
 - Vincula cada evento nuevo con el segmento MKV activo y guarda el desplazamiento exacto desde el inicio del archivo.
