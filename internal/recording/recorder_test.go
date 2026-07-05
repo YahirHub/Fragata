@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,7 +23,7 @@ func TestRecorderRotatesWithoutWaitingForPreviousFinalize(t *testing.T) {
 	completed := make(chan CompletedFile, 4)
 	done := make(chan error, 1)
 	recorder := Recorder{
-		CameraID: "cam-test", BaseDir: t.TempDir(), Hub: hub,
+		CameraID: "cam-test", StorageFolder: "oficina", BaseDir: t.TempDir(), Hub: hub,
 		SegmentDurationProvider: func() time.Duration { return 20 * time.Millisecond },
 		OnCompleted:             func(file CompletedFile) { completed <- file },
 	}
@@ -62,6 +63,9 @@ func TestRecorderRotatesWithoutWaitingForPreviousFinalize(t *testing.T) {
 	}
 
 	for _, file := range files {
+		if !containsPathPart(file.Path, "oficina") {
+			t.Fatalf("recording did not use configured folder: %s", file.Path)
+		}
 		if filepath.Ext(file.Path) != ".mkv" {
 			t.Fatalf("unexpected extension: %s", file.Path)
 		}
@@ -73,4 +77,13 @@ func TestRecorderRotatesWithoutWaitingForPreviousFinalize(t *testing.T) {
 			t.Fatalf("segment too small: %s (%d bytes)", file.Path, info.Size())
 		}
 	}
+}
+
+func containsPathPart(path, part string) bool {
+	for _, item := range strings.Split(filepath.Clean(path), string(filepath.Separator)) {
+		if item == part {
+			return true
+		}
+	}
+	return false
 }

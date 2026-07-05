@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="es" data-bs-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#4e73df">
+  <title>Agregar cámara · Fragata</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <fragata-app-layout page-title="Agregar cámara" page-icon="bi-plus-square-fill" active="add-camera">
+    <section class="page-heading">
+      <div>
+        <nav aria-label="breadcrumb"><ol class="breadcrumb small mb-2"><li class="breadcrumb-item"><a href="/">Dashboard</a></li><li class="breadcrumb-item"><a href="/cameras">Cámaras</a></li><li class="breadcrumb-item active" aria-current="page">Agregar</li></ol></nav>
+        <h2>Nueva cámara</h2>
+        <p>Introduce una IP o URL RTSP. Fragata detectará automáticamente el stream de máxima calidad.</p>
+      </div>
+      <a href="/cameras" class="btn btn-outline-secondary"><i class="bi bi-arrow-left me-2"></i>Volver al listado</a>
+    </section>
+
+    <form id="cameraForm" class="row g-4" novalidate>
+      <div class="col-12 col-xl-8">
+        <article class="card dashboard-card mb-4">
+          <div class="card-header bg-transparent form-section-header"><span class="form-section-icon"><i class="bi bi-camera-video"></i></span><div><span class="section-kicker">Identidad</span><h2 class="h5 mb-1">Información general</h2><p class="text-body-secondary mb-0">Nombre visible y carpeta para las grabaciones.</p></div></div>
+          <div class="card-body row g-3">
+            <div class="col-md-6"><label class="form-label" for="cameraName">Nombre de la cámara</label><input id="cameraName" class="form-control" name="name" placeholder="Cámara de oficina" maxlength="100" required><div class="invalid-feedback">Introduce un nombre para identificar la cámara.</div></div>
+            <div class="col-md-6"><label class="form-label" for="cameraFolder">Carpeta de grabación</label><div class="input-group"><span class="input-group-text"><i class="bi bi-folder2-open"></i></span><input id="cameraFolder" class="form-control font-monospace" name="folder_name" placeholder="camara-de-oficina" maxlength="80" required></div><div class="form-text">Se creará dentro de la carpeta de grabaciones. Fragata evitará nombres duplicados.</div></div>
+          </div>
+        </article>
+
+        <article class="card dashboard-card mb-4">
+          <div class="card-header bg-transparent form-section-header"><span class="form-section-icon"><i class="bi bi-hdd-network"></i></span><div><span class="section-kicker">Conexión</span><h2 class="h5 mb-1">Red y autenticación</h2><p class="text-body-secondary mb-0">ONVIF se intentará primero; después se probará el diccionario RTSP.</p></div></div>
+          <div class="card-body">
+            <div id="networkDiagnosticResults" class="alert alert-light border hidden" role="status"></div>
+            <div id="discoveryResults" class="discovery-results hidden mb-3"></div>
+            <div class="row g-3">
+              <div class="col-md-6"><label class="form-label" for="cameraHost">IP de la cámara</label><input id="cameraHost" class="form-control" name="host" inputmode="decimal" placeholder="192.168.10.50"><div class="form-text">La IP es suficiente si ONVIF o una ruta conocida están disponibles.</div></div>
+              <div class="col-md-6"><label class="form-label" for="cameraUsername">Usuario</label><input id="cameraUsername" class="form-control" name="username" placeholder="admin" autocomplete="username"></div>
+              <div class="col-md-6"><label class="form-label" for="cameraPassword">Contraseña</label><div class="input-group"><input id="cameraPassword" class="form-control" name="password" type="password" autocomplete="new-password" placeholder="Contraseña del dispositivo"><button class="btn btn-outline-secondary" type="button" data-password-toggle="#cameraPassword" aria-label="Mostrar contraseña"><i class="bi bi-eye"></i></button></div></div>
+              <div class="col-md-6 d-flex align-items-end"><div class="d-flex flex-wrap gap-2 w-100"><button id="discoverButton" type="button" class="btn btn-outline-primary flex-grow-1"><i class="bi bi-radar me-2"></i>Detectar en red</button><button id="networkDiagnosticButton" type="button" class="btn btn-outline-secondary flex-grow-1"><i class="bi bi-activity me-2"></i>Diagnosticar</button></div></div>
+              <div class="col-12"><label class="form-label" for="cameraRTSP">URL RTSP manual <span class="text-body-secondary fw-normal">(opcional)</span></label><div class="input-group"><span class="input-group-text"><i class="bi bi-link-45deg"></i></span><input id="cameraRTSP" class="form-control font-monospace" name="rtsp_url" placeholder="rtsp://192.168.10.50:554/cam/realmonitor?channel=1&subtype=0"><button type="button" id="probeRTSPButton" class="btn btn-outline-primary"><i class="bi bi-check2-circle me-2"></i>Probar URL</button></div><div class="form-text">Las credenciales se extraen y almacenan cifradas; no quedan embebidas en la URL persistida.</div></div>
+            </div>
+          </div>
+        </article>
+
+        <article class="card dashboard-card">
+          <div class="card-header bg-transparent form-section-header"><span class="form-section-icon"><i class="bi bi-record-circle"></i></span><div><span class="section-kicker">Grabación</span><h2 class="h5 mb-1">Preferencias iniciales</h2><p class="text-body-secondary mb-0">La grabación se mantiene apagada hasta que la actives desde ajustes o el listado.</p></div></div>
+          <div class="card-body row g-3">
+            <div class="col-md-6"><label class="form-label">Duración por archivo</label><fragata-duration-picker id="newCameraSegmentDuration" value-seconds="300"></fragata-duration-picker></div>
+            <div class="col-md-6 d-flex align-items-end"><div class="form-check form-switch form-switch-lg mb-2"><input class="form-check-input" name="upload" type="checkbox" role="switch" id="uploadSwitch"><label class="form-check-label" for="uploadSwitch"><strong>Subir archivos por SFTP</strong><small class="d-block text-body-secondary">Se aplicará a cada MKV cerrado.</small></label></div></div>
+          </div>
+        </article>
+      </div>
+
+      <div class="col-12 col-xl-4">
+        <aside class="card dashboard-card sticky-xl-top form-summary-card">
+          <div class="card-header bg-transparent"><span class="section-kicker">Resumen</span><h2 class="h5 mb-1">Antes de guardar</h2><p class="text-body-secondary mb-0">Fragata verificará el stream antes de registrar la cámara.</p></div>
+          <div class="card-body">
+            <ol class="setup-steps"><li><span>1</span><div><strong>Conectividad</strong><small>Comprueba ONVIF y puertos RTSP.</small></div></li><li><span>2</span><div><strong>Máxima calidad</strong><small>Compara perfiles H.264 y H.265.</small></div></li><li><span>3</span><div><strong>Guardado seguro</strong><small>Cifra la contraseña del dispositivo.</small></div></li></ol>
+            <div id="formStatus" class="alert alert-light border small mb-3" role="status">Completa los datos de la cámara.</div>
+            <button type="submit" class="btn btn-primary w-100 py-2"><i class="bi bi-plus-circle me-2"></i>Detectar y guardar cámara</button>
+          </div>
+        </aside>
+      </div>
+    </form>
+  </fragata-app-layout>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
+  <script src="/static/layouts.js" defer></script>
+  <script src="/static/core.js" defer></script>
+  <script src="/static/duration-picker.js" defer></script>
+  <script src="/static/camera-new.js" defer></script>
+</body>
+</html>

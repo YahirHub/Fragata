@@ -42,7 +42,7 @@ func NewManager(cfg config.Config, state *store.Store, uploader *upload.Uploader
 func (m *Manager) Start() {
 	for _, stored := range m.store.Cameras() {
 		cam := m.normalizeCamera(stored)
-		if cam.SegmentDurationSeconds != stored.SegmentDurationSeconds {
+		if cam.SegmentDurationSeconds != stored.SegmentDurationSeconds || cam.FolderName != stored.FolderName {
 			if err := m.store.SaveCamera(cam); err != nil {
 				m.logger.Warn("could not persist default segment duration", "camera_id", cam.ID, "error", err)
 			}
@@ -75,6 +75,11 @@ func (m *Manager) Add(cam model.Camera) (model.Camera, error) {
 	}
 	now := time.Now().UTC()
 	cam.ID = id
+	folder, err := m.uniqueFolderName(cam.FolderName, cam.Name, "")
+	if err != nil {
+		return model.Camera{}, err
+	}
+	cam.FolderName = folder
 	cam.CreatedAt = now
 	cam.UpdatedAt = now
 	if err := m.store.SaveCamera(cam); err != nil {
@@ -192,6 +197,7 @@ func (m *Manager) Redetect(ctx context.Context, id string) (DetectionResult, err
 	updated.ID = current.ID
 	updated.CreatedAt = current.CreatedAt
 	updated.SegmentDurationSeconds = segmentDurationSeconds
+	updated.FolderName = current.FolderName
 	updated.UpdatedAt = time.Now().UTC()
 	if err := m.store.SaveCamera(updated); err != nil {
 		return DetectionResult{}, err
@@ -265,6 +271,12 @@ func (m *Manager) restartWorker(cam model.Camera) {
 }
 
 func (m *Manager) normalizeCamera(cam model.Camera) model.Camera {
+	if cam.FolderName == "" {
+		folder, err := normalizeFolderName(cam.ID, "camera")
+		if err == nil {
+			cam.FolderName = folder
+		}
+	}
 	if cam.SegmentDurationSeconds < model.MinSegmentDurationSeconds || cam.SegmentDurationSeconds > model.MaxSegmentDurationSeconds {
 		seconds := int64(m.cfg.SegmentDuration / time.Second)
 		if seconds < model.MinSegmentDurationSeconds || seconds > model.MaxSegmentDurationSeconds {
@@ -387,7 +399,7 @@ func (w *worker) startRecorder() {
 	go func() {
 		defer close(done)
 		recorder := recording.Recorder{
-			CameraID: w.cam.ID, BaseDir: w.cfg.RecordingsDir, Hub: w.hub,
+			CameraID: w.cam.ID, StorageFolder: w.cam.FolderName, BaseDir: w.cfg.RecordingsDir, Hub: w.hub,
 			SegmentDurationProvider: func() time.Duration {
 				return time.Duration(w.segmentDuration.Load())
 			},

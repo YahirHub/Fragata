@@ -22,6 +22,7 @@ type CompletedFile struct {
 
 type Recorder struct {
 	CameraID                string
+	StorageFolder           string
 	BaseDir                 string
 	SegmentDuration         time.Duration
 	SegmentDurationProvider func() time.Duration
@@ -175,7 +176,11 @@ func ready(info stream.Info) bool {
 
 func (r *Recorder) start(info stream.Info, generation uint64) (*segment, error) {
 	now := time.Now()
-	dir := filepath.Join(r.BaseDir, safePart(r.CameraID), now.Format("2006"), now.Format("01"), now.Format("02"))
+	folder := r.StorageFolder
+	if strings.TrimSpace(folder) == "" {
+		folder = r.CameraID
+	}
+	dir := filepath.Join(r.BaseDir, safePart(folder), now.Format("2006"), now.Format("01"), now.Format("02"))
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("crear directorio de grabación: %w", err)
 	}

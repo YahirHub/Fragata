@@ -23,6 +23,7 @@ import (
 	"fragata/internal/model"
 	"fragata/internal/networkdiag"
 	"fragata/internal/onvif"
+	fragrtsp "fragata/internal/rtsp"
 	"fragata/internal/store"
 )
 
@@ -49,6 +50,9 @@ func New(cfg config.Config, authManager *auth.Manager, cameras *camera.Manager, 
 
 	protected := http.NewServeMux()
 	protected.HandleFunc("GET /", s.index)
+	protected.HandleFunc("GET /cameras", s.camerasPage)
+	protected.HandleFunc("GET /cameras/new", s.newCameraPage)
+	protected.HandleFunc("GET /cameras/{id}/settings", s.cameraSettingsPage)
 	protected.HandleFunc("GET /camera/{id}", s.cameraPage)
 	protected.HandleFunc("GET /api/session", s.session)
 	protected.HandleFunc("POST /api/logout", s.logout)
@@ -57,6 +61,7 @@ func New(cfg config.Config, authManager *auth.Manager, cameras *camera.Manager, 
 	protected.HandleFunc("POST /api/cameras", s.addCamera)
 	protected.HandleFunc("PATCH /api/cameras/{id}", s.updateCamera)
 	protected.HandleFunc("POST /api/cameras/{id}/redetect", s.redetectCamera)
+	protected.HandleFunc("POST /api/cameras/{id}/probe-settings", s.probeCameraSettings)
 	protected.HandleFunc("POST /api/rtsp/probe", s.probeRTSP)
 	protected.HandleFunc("POST /api/network/diagnose", s.diagnoseNetwork)
 	protected.HandleFunc("DELETE /api/cameras/{id}", s.deleteCamera)
@@ -109,6 +114,23 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) index(w http.ResponseWriter, _ *http.Request) {
 	s.serveAsset(w, "index.html", "text/html; charset=utf-8")
+}
+
+func (s *Server) camerasPage(w http.ResponseWriter, _ *http.Request) {
+	s.serveAsset(w, "cameras.html", "text/html; charset=utf-8")
+}
+
+func (s *Server) newCameraPage(w http.ResponseWriter, _ *http.Request) {
+	s.serveAsset(w, "camera-new.html", "text/html; charset=utf-8")
+}
+
+func (s *Server) cameraSettingsPage(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if _, ok := s.cameras.Camera(id); !ok {
+		http.NotFound(w, r)
+		return
+	}
+	s.serveAsset(w, "camera-settings.html", "text/html; charset=utf-8")
 }
 
 func (s *Server) cameraPage(w http.ResponseWriter, r *http.Request) {
@@ -209,31 +231,28 @@ func (s *Server) updateCamera(w http.ResponseWriter, r *http.Request) {
 	if !s.requireCSRF(w, r) {
 		return
 	}
-	var request struct {
-		Record                 *bool  `json:"record"`
-		SegmentDurationSeconds *int64 `json:"segment_duration_seconds"`
-	}
+	var request camera.UpdateRequest
 	if err := decodeJSON(w, r, &request); err != nil {
 		return
 	}
-	if request.Record == nil && request.SegmentDurationSeconds == nil {
-		writeError(w, http.StatusBadRequest, "indique un ajuste de grabación")
-		return
-	}
 	id := strings.TrimSpace(r.PathValue("id"))
-	cam, err := s.cameras.UpdateSettings(id, camera.CameraSettings{
-		Record: request.Record, SegmentDurationSeconds: request.SegmentDurationSeconds,
-	})
+	ctx, cancel := context.WithTimeout(r.Context(), 150*time.Second)
+	defer cancel()
+	cam, _, err := s.cameras.Update(ctx, id, request)
 	if err != nil {
-		if strings.Contains(err.Error(), "no encontrada") {
-			writeError(w, http.StatusNotFound, err.Error())
-			return
+		message := model.RedactSecrets(err.Error())
+		switch {
+		case strings.Contains(message, "no encontrada"):
+			writeError(w, http.StatusNotFound, message)
+		case strings.Contains(message, "detección"), strings.Contains(message, "RTSP"), strings.Contains(message, "ONVIF"), strings.Contains(message, "conexión"):
+			writeError(w, http.StatusUnprocessableEntity, message)
+		case strings.Contains(message, "nombre"), strings.Contains(message, "carpeta"), strings.Contains(message, "duración"),
+			strings.Contains(message, "introduzca"), strings.Contains(message, "dirección IP"), strings.Contains(message, "puerto inválido"),
+			strings.Contains(message, "obligatorio"), strings.Contains(message, "no puede superar"):
+			writeError(w, http.StatusBadRequest, message)
+		default:
+			writeError(w, http.StatusInternalServerError, "no se pudo actualizar la cámara")
 		}
-		if strings.Contains(err.Error(), "duración") || strings.Contains(err.Error(), "minutos completos") {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "no se pudo actualizar la cámara")
 		return
 	}
 	writeJSON(w, http.StatusOK, cam.Public())
@@ -252,6 +271,61 @@ func (s *Server) redetectCamera(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
+		writeError(w, http.StatusUnprocessableEntity, model.RedactSecrets(err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"camera": detected.Camera.Public(), "detection_method": detected.Method, "diagnostics": detected.Diagnostics,
+	})
+}
+
+func (s *Server) probeCameraSettings(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCSRF(w, r) {
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	current, ok := s.cameras.Camera(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cámara no encontrada")
+		return
+	}
+	var request camera.UpdateRequest
+	if err := decodeJSON(w, r, &request); err != nil {
+		return
+	}
+	host, username, password, rawURL := current.Host, current.Username, current.Password, current.RTSPURL
+	rtspURLChanged := false
+	if request.Host != nil {
+		host = strings.TrimSpace(*request.Host)
+	}
+	if request.Username != nil {
+		username = strings.TrimSpace(*request.Username)
+	}
+	if request.Password != nil && *request.Password != "" {
+		password = *request.Password
+	}
+	if request.RTSPURL != nil {
+		rawURL = strings.TrimSpace(*request.RTSPURL)
+		if rawURL == model.RedactURL(current.RTSPURL) {
+			rawURL = current.RTSPURL
+		}
+		rtspURLChanged = rawURL != current.RTSPURL
+	}
+	if !rtspURLChanged {
+		rawURL = ""
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 150*time.Second)
+	defer cancel()
+	detectRequest := camera.AddRequest{
+		Name: current.Name, Host: host, Username: username, Password: password, RTSPURL: rawURL,
+		FolderName: current.FolderName,
+	}
+	detected, err := camera.Detect(ctx, s.cfg, detectRequest)
+	if err != nil && !rtspURLChanged && current.RTSPURL != "" {
+		detectRequest.RTSPURL = fragrtsp.NormalizeHost(current.RTSPURL, host)
+		detected, err = camera.Detect(ctx, s.cfg, detectRequest)
+	}
+	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, model.RedactSecrets(err.Error()))
 		return
 	}

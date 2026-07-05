@@ -32,6 +32,7 @@ type Camera struct {
 	LiveCodec              string    `json:"live_codec,omitempty"`
 	LiveWidth              int       `json:"live_width,omitempty"`
 	LiveHeight             int       `json:"live_height,omitempty"`
+	FolderName             string    `json:"folder_name"`
 	Enabled                bool      `json:"enabled"`
 	Record                 bool      `json:"record"`
 	SegmentDurationSeconds int64     `json:"segment_duration_seconds"`
@@ -59,6 +60,8 @@ type CameraPublic struct {
 	LiveCodec              string    `json:"live_codec,omitempty"`
 	LiveWidth              int       `json:"live_width,omitempty"`
 	LiveHeight             int       `json:"live_height,omitempty"`
+	FolderName             string    `json:"folder_name"`
+	HasPassword            bool      `json:"has_password"`
 	Enabled                bool      `json:"enabled"`
 	Record                 bool      `json:"record"`
 	SegmentDurationSeconds int64     `json:"segment_duration_seconds"`
@@ -72,7 +75,7 @@ func (c Camera) Public() CameraPublic {
 		ID: c.ID, Name: c.Name, Host: c.Host, Username: c.Username, RTSPURL: RedactURL(c.RTSPURL), LiveRTSPURL: RedactURL(c.LiveRTSPURL),
 		ProfileToken: c.ProfileToken, LiveProfileToken: c.LiveProfileToken, Manufacturer: c.Manufacturer, Model: c.Model,
 		SerialNumber: c.SerialNumber, FirmwareVersion: c.FirmwareVersion, Codec: c.Codec, Width: c.Width, Height: c.Height,
-		LiveCodec: c.LiveCodec, LiveWidth: c.LiveWidth, LiveHeight: c.LiveHeight,
+		LiveCodec: c.LiveCodec, LiveWidth: c.LiveWidth, LiveHeight: c.LiveHeight, FolderName: c.FolderName, HasPassword: c.Password != "",
 		Enabled: c.Enabled, Record: c.Record, SegmentDurationSeconds: c.SegmentDurationSeconds, Upload: c.Upload,
 		CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
 	}

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.0 - 2026-07-05
+
+- Separa el dashboard, listado de cámaras, alta y ajustes en páginas independientes.
+- Implementa un CRUD profesional de cámaras con tabla responsiva, búsqueda y filtros por estado.
+- Añade menú de acciones de tres puntos para ver, ajustar, redetectar, iniciar o detener grabación y eliminar.
+- Incorpora una página de alta dedicada con descubrimiento ONVIF, diagnóstico de red y prueba RTSP.
+- Añade una página de ajustes por cámara para renombrar, habilitar, cambiar IP, usuario, contraseña y URL RTSP.
+- Permite definir una carpeta de grabación segura y única por cámara.
+- Valida los cambios de conexión antes de sustituir el stream activo y conserva la contraseña cuando el campo queda vacío.
+- Permite configurar grabación, duración de segmentos y subida SFTP desde los ajustes.
+- Migra cámaras existentes a una carpeta compatible basada en su identificador sin mover grabaciones anteriores.
+- Mejora dashboard, tablas, formularios, estados vacíos, navegación y experiencia móvil.
+
 ## 0.5.0 - 2026-07-05
 
 - Rediseña la interfaz con una estética administrativa profesional inspirada en SB Admin.

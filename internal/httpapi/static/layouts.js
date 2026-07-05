@@ -1,8 +1,8 @@
 (() => {
   const navItems = [
-    { key: 'dashboard', href: '/#dashboard', icon: 'bi-speedometer2', label: 'Dashboard' },
-    { key: 'add-camera', href: '/#add-camera', icon: 'bi-camera-video-fill', label: 'Agregar cámara' },
-    { key: 'cameras', href: '/#cameras', icon: 'bi-grid-3x3-gap-fill', label: 'Cámaras' },
+    { key: 'dashboard', href: '/', icon: 'bi-speedometer2', label: 'Dashboard' },
+    { key: 'cameras', href: '/cameras', icon: 'bi-camera-video-fill', label: 'Cámaras' },
+    { key: 'add-camera', href: '/cameras/new', icon: 'bi-plus-square-fill', label: 'Agregar cámara' },
   ];
 
   function navMarkup(active, mobile = false) {
@@ -65,7 +65,7 @@
                 </div>
               </div>
               <div class="topbar-tools">
-                <span id="ffmpegBadge" class="badge rounded-pill text-bg-success-subtle border border-success-subtle text-success-emphasis hidden"><i class="bi bi-cpu me-1"></i>FFmpeg</span>
+                <span id="ffmpegBadge" class="badge rounded-pill bg-success-subtle border border-success-subtle text-success-emphasis hidden"><i class="bi bi-cpu me-1"></i>FFmpeg</span>
                 <span id="queueBadge" class="badge rounded-pill text-bg-light border"><i class="bi bi-cloud-arrow-up me-1"></i>0 subidas</span>
                 <div class="dropdown">
                   <button class="user-dropdown" type="button" data-bs-toggle="dropdown" aria-expanded="false">
@@ -84,7 +84,7 @@
 
             <main class="app-content">${content}</main>
             <footer class="app-footer">
-              <span>Fragata <strong>v0.5.0</strong></span>
+              <span>Fragata <strong>v0.6.0</strong></span>
               <span>Servidor NVR ligero · Go</span>
             </footer>
           </div>
@@ -143,7 +143,7 @@
               <span><strong>Fragata</strong><small>Servidor de cámaras</small></span>
             </div>
             <div class="auth-card">${content}</div>
-            <footer class="auth-footer">Fragata v0.5.0 · Servidor NVR ligero</footer>
+            <footer class="auth-footer">Fragata v0.6.0 · Servidor NVR ligero</footer>
           </section>
         </main>
       `;

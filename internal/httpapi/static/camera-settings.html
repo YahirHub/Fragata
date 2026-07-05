@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="es" data-bs-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#4e73df">
+  <title>Ajustes de cámara · Fragata</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <fragata-app-layout page-title="Ajustes de cámara" page-icon="bi-sliders" active="cameras">
+    <section class="page-heading">
+      <div>
+        <nav aria-label="breadcrumb"><ol class="breadcrumb small mb-2"><li class="breadcrumb-item"><a href="/">Dashboard</a></li><li class="breadcrumb-item"><a href="/cameras">Cámaras</a></li><li id="cameraBreadcrumb" class="breadcrumb-item active" aria-current="page">Ajustes</li></ol></nav>
+        <h2 id="settingsTitle">Cargando cámara…</h2>
+        <p id="settingsSubtitle">Consulta y modifica la configuración del dispositivo.</p>
+      </div>
+      <div class="d-flex flex-column flex-sm-row gap-2"><a id="openCameraButton" href="/cameras" class="btn btn-outline-primary"><i class="bi bi-eye me-2"></i>Ver cámara</a><a href="/cameras" class="btn btn-outline-secondary"><i class="bi bi-arrow-left me-2"></i>Volver</a></div>
+    </section>
+
+    <form id="settingsForm" class="row g-4" novalidate>
+      <div class="col-12 col-xl-8">
+        <article class="card dashboard-card mb-4">
+          <div class="card-header bg-transparent form-section-header"><span class="form-section-icon"><i class="bi bi-card-heading"></i></span><div><span class="section-kicker">General</span><h2 class="h5 mb-1">Identidad y almacenamiento</h2><p class="text-body-secondary mb-0">Personaliza el nombre visible y el directorio para nuevas grabaciones.</p></div></div>
+          <div class="card-body row g-3">
+            <div class="col-md-6"><label class="form-label" for="cameraName">Nombre de la cámara</label><input id="cameraName" class="form-control" name="name" maxlength="100" required><div class="invalid-feedback">El nombre es obligatorio.</div></div>
+            <div class="col-md-6"><label class="form-label" for="cameraFolder">Carpeta de grabación</label><div class="input-group"><span class="input-group-text"><i class="bi bi-folder2-open"></i></span><input id="cameraFolder" class="form-control font-monospace" name="folder_name" maxlength="80" required></div><div class="form-text">El cambio aplica a grabaciones futuras; los archivos existentes no se moverán.</div></div>
+            <div class="col-12"><div class="form-check form-switch form-switch-lg"><input id="cameraEnabled" class="form-check-input" name="enabled" type="checkbox" role="switch"><label class="form-check-label" for="cameraEnabled"><strong>Cámara habilitada</strong><small class="d-block text-body-secondary">Al deshabilitarla se detiene la conexión, vista en vivo y grabación.</small></label></div></div>
+          </div>
+        </article>
+
+        <article class="card dashboard-card mb-4">
+          <div class="card-header bg-transparent form-section-header"><span class="form-section-icon"><i class="bi bi-router"></i></span><div><span class="section-kicker">Conexión</span><h2 class="h5 mb-1">Red y credenciales</h2><p class="text-body-secondary mb-0">Los cambios se validan antes de reemplazar la conexión activa.</p></div></div>
+          <div class="card-body">
+            <div class="row g-3">
+              <div class="col-md-6"><label class="form-label" for="cameraHost">Dirección IP</label><input id="cameraHost" class="form-control" name="host" inputmode="decimal" required></div>
+              <div class="col-md-6"><label class="form-label" for="cameraUsername">Usuario</label><input id="cameraUsername" class="form-control" name="username" autocomplete="username"></div>
+              <div class="col-md-6"><label class="form-label" for="cameraPassword">Nueva contraseña</label><div class="input-group"><input id="cameraPassword" class="form-control" name="password" type="password" autocomplete="new-password" placeholder="Dejar vacía para conservar la actual"><button class="btn btn-outline-secondary" type="button" data-password-toggle="#cameraPassword" aria-label="Mostrar contraseña"><i class="bi bi-eye"></i></button></div><div id="passwordState" class="form-text">La contraseña actual nunca se muestra.</div></div>
+              <div class="col-md-6 d-flex align-items-end"><button id="testConnectionButton" type="button" class="btn btn-outline-primary w-100"><i class="bi bi-plug me-2"></i>Probar configuración</button></div>
+              <div class="col-12"><label class="form-label" for="cameraRTSP">URL RTSP principal</label><div class="input-group"><span class="input-group-text"><i class="bi bi-link-45deg"></i></span><input id="cameraRTSP" class="form-control font-monospace" name="rtsp_url"></div><div class="form-text">Déjala vacía para volver a detectar la ruta con ONVIF y el diccionario RTSP.</div></div>
+            </div>
+            <div id="connectionStatus" class="alert alert-light border small mt-3 mb-0" role="status">Sin cambios pendientes.</div>
+          </div>
+        </article>
+
+        <article class="card dashboard-card mb-4">
+          <div class="card-header bg-transparent form-section-header"><span class="form-section-icon"><i class="bi bi-record-circle"></i></span><div><span class="section-kicker">Grabación</span><h2 class="h5 mb-1">Captura y respaldo</h2><p class="text-body-secondary mb-0">Controla la grabación continua, duración de archivos y subida remota.</p></div></div>
+          <div class="card-body row g-4">
+            <div class="col-md-6"><div class="form-check form-switch form-switch-lg"><input id="recordSwitch" class="form-check-input" name="record" type="checkbox" role="switch"><label class="form-check-label" for="recordSwitch"><strong>Grabar video</strong><small class="d-block text-body-secondary">Conserva el stream principal sin recomprimir.</small></label></div></div>
+            <div class="col-md-6"><div class="form-check form-switch form-switch-lg"><input id="uploadSwitch" class="form-check-input" name="upload" type="checkbox" role="switch"><label class="form-check-label" for="uploadSwitch"><strong>Subir por SFTP</strong><small class="d-block text-body-secondary">Encola cada MKV finalizado.</small></label></div></div>
+            <div class="col-12"><label class="form-label">Duración por archivo</label><fragata-duration-picker id="segmentDurationPicker" value-seconds="300"></fragata-duration-picker><div class="form-text">Los cambios se aplican en la siguiente rotación sin interrumpir el stream.</div></div>
+          </div>
+        </article>
+
+        <article class="card dashboard-card border-danger-subtle">
+          <div class="card-header bg-transparent form-section-header"><span class="form-section-icon danger"><i class="bi bi-exclamation-triangle"></i></span><div><span class="section-kicker text-danger">Zona de peligro</span><h2 class="h5 mb-1">Eliminar cámara</h2><p class="text-body-secondary mb-0">El dispositivo se quitará de Fragata, pero las grabaciones existentes permanecerán en disco.</p></div></div>
+          <div class="card-body d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3"><div><strong>Esta acción no se puede deshacer.</strong><small class="d-block text-body-secondary">La carpeta y sus archivos no serán eliminados.</small></div><button id="deleteCameraButton" type="button" class="btn btn-outline-danger"><i class="bi bi-trash3 me-2"></i>Eliminar cámara</button></div>
+        </article>
+      </div>
+
+      <div class="col-12 col-xl-4">
+        <aside class="sticky-xl-top settings-sidebar">
+          <article class="card dashboard-card mb-4">
+            <div class="card-header bg-transparent"><span class="section-kicker">Dispositivo</span><h2 class="h5 mb-1">Información detectada</h2></div>
+            <div class="card-body"><dl class="device-details"><div><dt>Fabricante</dt><dd id="deviceManufacturer">—</dd></div><div><dt>Modelo</dt><dd id="deviceModel">—</dd></div><div><dt>Serie</dt><dd id="deviceSerial">—</dd></div><div><dt>Firmware</dt><dd id="deviceFirmware">—</dd></div><div><dt>Stream principal</dt><dd id="deviceStream">—</dd></div><div><dt>Vista web</dt><dd id="deviceLiveStream">—</dd></div></dl><button id="redetectButton" type="button" class="btn btn-outline-secondary w-100"><i class="bi bi-arrow-repeat me-2"></i>Redetectar calidad</button></div>
+          </article>
+          <article class="card dashboard-card save-panel"><div class="card-body"><div id="saveStatus" class="small text-body-secondary mb-3">Guarda para aplicar los cambios.</div><button id="saveButton" type="submit" class="btn btn-primary w-100 py-2"><i class="bi bi-check2-circle me-2"></i>Guardar ajustes</button></div></article>
+        </aside>
+      </div>
+    </form>
+  </fragata-app-layout>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
+  <script src="/static/layouts.js" defer></script>
+  <script src="/static/core.js" defer></script>
+  <script src="/static/duration-picker.js" defer></script>
+  <script src="/static/camera-settings.js" defer></script>
+</body>
+</html>

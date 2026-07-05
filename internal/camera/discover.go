@@ -21,6 +21,7 @@ type AddRequest struct {
 	Username               string `json:"username"`
 	Password               string `json:"password"`
 	RTSPURL                string `json:"rtsp_url"`
+	FolderName             string `json:"folder_name,omitempty"`
 	Enabled                *bool  `json:"enabled,omitempty"`
 	Record                 *bool  `json:"record,omitempty"`
 	SegmentDurationSeconds int64  `json:"segment_duration_seconds,omitempty"`
@@ -271,6 +272,11 @@ func prepareCamera(cfg config.Config, request AddRequest) (model.Camera, string,
 	if base.Name == "" {
 		base.Name = "Cámara " + host
 	}
+	folder, err := normalizeFolderName(request.FolderName, base.Name)
+	if err != nil {
+		return model.Camera{}, "", 0, err
+	}
+	base.FolderName = folder
 	return base, rawURL, requestedPort, nil
 }
 

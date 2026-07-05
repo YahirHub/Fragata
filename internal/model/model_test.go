@@ -44,3 +44,11 @@ func TestCameraPublicIncludesSegmentDuration(t *testing.T) {
 		t.Fatalf("unexpected segment duration: %d", got)
 	}
 }
+
+func TestCameraPublicExposesFolderAndPasswordStateWithoutSecret(t *testing.T) {
+	camera := Camera{FolderName: "oficina", Password: "secreto"}
+	public := camera.Public()
+	if public.FolderName != "oficina" || !public.HasPassword {
+		t.Fatalf("unexpected public camera: %#v", public)
+	}
+}

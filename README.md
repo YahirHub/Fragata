@@ -29,8 +29,9 @@ Incluido:
 - Login opcional definido en `.env`.
 - Sesiones persistentes, CSRF, cookies `HttpOnly` y límite básico de intentos de acceso.
 - Credenciales de cámaras cifradas con AES-256-GCM dentro del estado local.
-- Panel web profesional y responsivo con layout administrativo, sidebar, visor dedicado, Bootstrap e iconos por CDN.
+- Panel web profesional y responsivo con dashboard, CRUD de cámaras, alta y ajustes en páginas independientes, sidebar, visor dedicado, Bootstrap e iconos por CDN.
 - Layout de autenticación independiente, dropdown de usuario y modo Invitado cuando el login está deshabilitado.
+- Carpeta de grabación configurable y única por cámara, con validación contra path traversal y nombres duplicados.
 - API HTTP y frontend propio embebido en el binario; únicamente Bootstrap y Bootstrap Icons se cargan desde CDN.
 - Docker, Compose con red LAN del host, systemd y scripts de compilación estática.
 - Diagnóstico de puertos desde el mismo proceso que intenta abrir la cámara.
@@ -92,13 +93,27 @@ FRAGATA_SECURE_COOKIES=true
 Fragata usa dos componentes de layout reutilizables:
 
 - `fragata-auth-layout`: pantalla de inicio de sesión independiente.
-- `fragata-app-layout`: sidebar, topbar, dropdown de usuario, contenido y footer compartidos por dashboard y visor.
+- `fragata-app-layout`: sidebar, topbar, dropdown de usuario, contenido y footer compartidos por todas las páginas administrativas.
 
-En escritorio, el sidebar permanece fijo a la izquierda. En pantallas pequeñas se convierte en un menú `offcanvas` accesible desde la barra superior. El dashboard muestra métricas de cámaras, conexiones, grabaciones y subidas; las tarjetas y formularios se reorganizan automáticamente en teléfonos.
+La administración está separada en rutas claras:
+
+- `/`: dashboard operativo.
+- `/cameras`: CRUD y tabla de cámaras con búsqueda, filtros y menú de acciones.
+- `/cameras/new`: alta y detección de una cámara.
+- `/cameras/<id>/settings`: identidad, carpeta, red, credenciales, grabación y SFTP.
+- `/camera/<id>`: visor en vivo y pantalla completa.
+
+En escritorio, el sidebar permanece fijo a la izquierda. En pantallas pequeñas se convierte en un menú `offcanvas` accesible desde la barra superior. Las tablas conservan desplazamiento horizontal controlado y los formularios se reorganizan para teléfonos.
 
 Cuando el login está configurado, el dropdown muestra el usuario administrador y permite cerrar sesión. Si `FRAGATA_ADMIN_USER` o `FRAGATA_ADMIN_PASSWORD` están vacíos, muestra `Invitado` y señala que la autenticación está desactivada.
 
 Bootstrap 5.3.8 y Bootstrap Icons 1.13.1 se cargan desde jsDelivr con versión fija. La política CSP permite únicamente ese CDN para scripts, estilos y fuentes, manteniendo bloqueados otros orígenes.
+
+## Administrar cámaras
+
+El listado de cámaras usa un menú de tres puntos por fila para abrir el visor, modificar ajustes, redetectar perfiles, iniciar o detener la grabación y eliminar el registro. La página de ajustes permite cambiar nombre, carpeta, IP, usuario, contraseña, URL RTSP, estado, duración y subida SFTP.
+
+Al cambiar IP, usuario, contraseña o URL RTSP, Fragata prueba la nueva configuración antes de guardarla. Una contraseña vacía conserva la credencial cifrada actual. Cambiar la carpeta afecta únicamente a nuevas grabaciones y no mueve los archivos existentes.
 
 ## Agregar una cámara
 
@@ -222,7 +237,7 @@ Las cámaras ya guardadas antes de esta versión pueden conservar la URL antigua
 Estructura:
 
 ```text
-data/recordings/<camera-id>/2026/07/05/14-30-00.000.mkv
+data/recordings/<carpeta-de-la-camara>/2026/07/05/14-30-00.000.mkv
 ```
 
 Cada segmento se escribe primero como:

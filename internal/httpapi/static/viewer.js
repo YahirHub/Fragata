@@ -27,6 +27,7 @@ async function init() {
   document.title = `${camera.name} · Fragata`;
   q('#cameraName').textContent = camera.name;
   q('#cameraSubtitle').textContent = `${camera.host} · ${camera.manufacturer || ''} ${camera.model || ''}`.trim();
+  q('#cameraSettingsButton').href = `/cameras/${encodeURIComponent(camera.id)}/settings`;
   q('fragata-app-layout')?.setSubtitle(`${camera.name} · ${camera.host}`);
   q('#primaryInfo').textContent = `${camera.codec || '—'} · ${camera.width && camera.height ? `${camera.width}×${camera.height}` : 'resolución pendiente'}`;
   q('#recordToggle').checked = camera.record;
