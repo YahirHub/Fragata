@@ -2,6 +2,7 @@
   const navItems = [
     { key: 'dashboard', href: '/', icon: 'bi-speedometer2', label: 'Dashboard' },
     { key: 'cameras', href: '/cameras', icon: 'bi-camera-video-fill', label: 'Cámaras' },
+    { key: 'events', href: '/events', icon: 'bi-activity', label: 'Eventos' },
     { key: 'add-camera', href: '/cameras/new', icon: 'bi-plus-square-fill', label: 'Agregar cámara' },
     { key: 'sftp', href: '/settings/sftp', icon: 'bi-cloud-arrow-up-fill', label: 'Servidores SFTP' },
     { key: 'storage', href: '/settings/storage', icon: 'bi-device-ssd-fill', label: 'Almacenamiento' },
@@ -86,7 +87,7 @@
 
             <main class="app-content">${content}</main>
             <footer class="app-footer">
-              <span>Fragata <strong>v0.7.1</strong></span>
+              <span>Fragata <strong>v0.8.1</strong></span>
               <span>Servidor NVR ligero · Go</span>
             </footer>
           </div>
@@ -145,7 +146,7 @@
               <span><strong>Fragata</strong><small>Servidor de cámaras</small></span>
             </div>
             <div class="auth-card">${content}</div>
-            <footer class="auth-footer">Fragata v0.7.1 · Servidor NVR ligero</footer>
+            <footer class="auth-footer">Fragata v0.8.1 · Servidor NVR ligero</footer>
           </section>
         </main>
       `;

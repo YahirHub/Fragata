@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"fragata/internal/config"
+	"fragata/internal/detection"
 	"fragata/internal/model"
 	"fragata/internal/recording"
 	fragrtsp "fragata/internal/rtsp"
@@ -190,6 +191,9 @@ func (m *Manager) Redetect(ctx context.Context, id string) (DetectionResult, err
 	enabled, record, upload := current.Enabled, current.Record, current.Upload
 	sftpProfileID := current.SFTPProfileID
 	segmentDurationSeconds := current.SegmentDurationSeconds
+	detectionEnabled, detectMotion, detectPerson := current.DetectionEnabled, current.DetectMotion, current.DetectPerson
+	motionSensitivity, detectionInterval, personConfidence, detectionCooldown := current.MotionSensitivity, current.DetectionIntervalSecs, current.PersonConfidence, current.DetectionCooldownSecs
+	detectionZone, snapshotURL := current.DetectionZone, current.SnapshotURL
 	detected, err := Detect(ctx, m.cfg, AddRequest{
 		Name: current.Name, Host: current.Host, Username: current.Username, Password: current.Password,
 		Enabled: &enabled, Record: &record, Upload: &upload, SFTPProfileID: sftpProfileID,
@@ -203,6 +207,17 @@ func (m *Manager) Redetect(ctx context.Context, id string) (DetectionResult, err
 	updated.SegmentDurationSeconds = segmentDurationSeconds
 	updated.FolderName = current.FolderName
 	updated.SFTPProfileID = current.SFTPProfileID
+	if updated.SnapshotURL == "" {
+		updated.SnapshotURL = snapshotURL
+	}
+	updated.DetectionEnabled = detectionEnabled
+	updated.DetectMotion = detectMotion
+	updated.DetectPerson = detectPerson
+	updated.MotionSensitivity = motionSensitivity
+	updated.DetectionIntervalSecs = detectionInterval
+	updated.PersonConfidence = personConfidence
+	updated.DetectionCooldownSecs = detectionCooldown
+	updated.DetectionZone = detectionZone
 	updated.UpdatedAt = time.Now().UTC()
 	if err := m.store.SaveCamera(updated); err != nil {
 		return DetectionResult{}, err
@@ -271,7 +286,7 @@ func (m *Manager) startWorker(cam model.Camera) {
 	}
 	ctx, cancel := context.WithCancel(m.ctx)
 	cam = m.normalizeCamera(cam)
-	w := &worker{cam: cam, cfg: m.cfg, uploader: m.uploader, logger: m.logger, hub: stream.NewHub(), ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	w := &worker{cam: cam, cfg: m.cfg, store: m.store, uploader: m.uploader, logger: m.logger, hub: stream.NewHub(), ctx: ctx, cancel: cancel, done: make(chan struct{})}
 	w.segmentDuration.Store(int64(time.Duration(cam.SegmentDurationSeconds) * time.Second))
 	w.status = model.RuntimeStatus{CameraID: cam.ID, State: "starting", Codec: cam.Codec}
 	m.workers[cam.ID] = w
@@ -306,18 +321,36 @@ func (m *Manager) normalizeCamera(cam model.Camera) model.Camera {
 		}
 		cam.SegmentDurationSeconds = seconds
 	}
+	if cam.MotionSensitivity < 1 || cam.MotionSensitivity > 100 {
+		cam.MotionSensitivity = 65
+	}
+	if cam.DetectionIntervalSecs < 1 || cam.DetectionIntervalSecs > 60 {
+		cam.DetectionIntervalSecs = 1
+	}
+	if cam.PersonConfidence < 40 || cam.PersonConfidence > 95 {
+		cam.PersonConfidence = 55
+	}
+	if cam.DetectionCooldownSecs < 1 || cam.DetectionCooldownSecs > 3600 {
+		cam.DetectionCooldownSecs = 30
+	}
+	cam.DetectionZone = cam.DetectionZone.Normalized()
+	if !cam.DetectMotion && !cam.DetectPerson {
+		cam.DetectMotion = true
+	}
 	return cam
 }
 
 type worker struct {
 	cam             model.Camera
 	cfg             config.Config
+	store           *store.Store
 	uploader        *upload.Uploader
 	logger          *slog.Logger
 	hub             *stream.Hub
 	ctx             context.Context
 	cancel          context.CancelFunc
 	done            chan struct{}
+	detectionDone   chan struct{}
 	mu              sync.RWMutex
 	status          model.RuntimeStatus
 	recordingMu     sync.Mutex
@@ -343,6 +376,13 @@ func (w *worker) run() {
 	defer w.hub.Close()
 	defer w.stopRecorder()
 	defer w.stopLive()
+	if w.cam.DetectionEnabled {
+		w.detectionDone = make(chan struct{})
+		go w.runDetection()
+		defer func() { w.cancel(); <-w.detectionDone }()
+	} else {
+		defer w.cancel()
+	}
 	if w.cam.Record {
 		w.startRecorder()
 	}
@@ -396,6 +436,39 @@ func (w *worker) run() {
 				backoff = 30 * time.Second
 			}
 		}
+	}
+}
+
+func (w *worker) runDetection() {
+	defer close(w.detectionDone)
+	runner := detection.Runner{
+		Camera: w.cam, DataDir: w.cfg.DataDir, Store: w.store, Logger: w.logger,
+		RecordingSnapshot: func(at time.Time) (string, time.Time, bool) {
+			w.mu.RLock()
+			path := w.status.RecordingPath
+			startedAt := w.status.RecordingStarted
+			w.mu.RUnlock()
+			if strings.TrimSpace(path) == "" || startedAt.IsZero() || at.Before(startedAt) {
+				return "", time.Time{}, false
+			}
+			return path, startedAt, true
+		},
+		OnStatus: func(state string, score float64, eventType string, at time.Time) {
+			w.update(func(status *model.RuntimeStatus) {
+				status.DetectionState = state
+				status.LastMotionScore = score
+				if eventType != "" {
+					status.LastEventType = eventType
+				}
+				if !at.IsZero() {
+					status.LastDetectionAt = at
+				}
+			})
+		},
+	}
+	if err := runner.Run(w.ctx); err != nil && !errors.Is(err, context.Canceled) {
+		w.update(func(status *model.RuntimeStatus) { status.DetectionState = "error" })
+		w.logger.Warn("camera detection stopped", "camera_id", w.cam.ID, "error", model.RedactSecrets(err.Error()))
 	}
 }
 

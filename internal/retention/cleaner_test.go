@@ -59,3 +59,37 @@ func writeAgedFile(t *testing.T, dir, name string, modified time.Time) string {
 	}
 	return path
 }
+
+func TestCleanupRemovesOldDetectionSnapshots(t *testing.T) {
+	root := t.TempDir()
+	state, err := store.Open(filepath.Join(root, "state.json"), bytes.Repeat([]byte{4}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SaveRetention(model.RetentionPolicy{Enabled: true, Value: 30, Unit: "days"}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 5, 12, 0, 0, 0, time.UTC)
+	eventsRoot := filepath.Join(root, "events")
+	oldPath := filepath.Join(eventsRoot, "entrada", "old.jpg")
+	if err := os.MkdirAll(filepath.Dir(oldPath), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(oldPath, []byte("jpeg"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SaveDetectionEvent(model.DetectionEvent{ID: "old-event", CameraID: "cam", SnapshotPath: "events/entrada/old.jpg", CreatedAt: now.AddDate(0, 0, -60)}); err != nil {
+		t.Fatal(err)
+	}
+
+	result := (Cleaner{BaseDir: filepath.Join(root, "recordings"), EventsDir: eventsRoot, Store: state}).Cleanup(now)
+	if result.EventSnapshotsDeleted != 1 {
+		t.Fatalf("deleted %d event snapshots, want 1", result.EventSnapshotsDeleted)
+	}
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Fatalf("old event snapshot still exists: %v", err)
+	}
+	if events := state.DetectionEvents("", 10); len(events) != 0 {
+		t.Fatalf("old event metadata still exists: %#v", events)
+	}
+}

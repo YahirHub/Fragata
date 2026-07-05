@@ -51,6 +51,7 @@
             <ul class="dropdown-menu dropdown-menu-end shadow-sm">
               <li><a class="dropdown-item" href="/camera/${encodeURIComponent(camera.id)}"><i class="bi bi-eye me-2"></i>Ver cámara</a></li>
               <li><a class="dropdown-item" href="/cameras/${encodeURIComponent(camera.id)}/settings"><i class="bi bi-sliders me-2"></i>Ajustes</a></li>
+              <li><a class="dropdown-item" href="/events?camera_id=${encodeURIComponent(camera.id)}"><i class="bi bi-activity me-2"></i>Ver eventos</a></li>
               <li><button class="dropdown-item" type="button" data-action="redetect"><i class="bi bi-arrow-repeat me-2"></i>Redetectar calidad</button></li>
               <li><button class="dropdown-item" type="button" data-action="record"><i class="bi ${camera.record ? 'bi-stop-circle' : 'bi-record-circle'} me-2"></i>${camera.record ? 'Detener grabación' : 'Iniciar grabación'}</button></li>
               <li><hr class="dropdown-divider"></li>

@@ -30,3 +30,16 @@ func TestValidateSegmentDuration(t *testing.T) {
 		t.Fatal("expected minute precision error")
 	}
 }
+
+func TestValidateSnapshotURLRequiresCameraHost(t *testing.T) {
+	got, err := validateSnapshotURL("http://admin:secret@192.168.1.20/cgi-bin/snapshot.cgi?channel=1", "192.168.1.20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "http://192.168.1.20/cgi-bin/snapshot.cgi?channel=1" {
+		t.Fatalf("unexpected sanitized snapshot URL: %q", got)
+	}
+	if _, err := validateSnapshotURL("http://192.168.1.99/snapshot.jpg", "192.168.1.20"); err == nil {
+		t.Fatal("expected foreign host rejection")
+	}
+}

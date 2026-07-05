@@ -92,7 +92,7 @@ func main() {
 	defer stop()
 	cameraManager.Start()
 	go uploader.Run(ctx)
-	go (retention.Cleaner{BaseDir: cfg.RecordingsDir, Store: state, Logger: logger, Interval: cfg.RetentionInterval}).Run(ctx)
+	go (retention.Cleaner{BaseDir: cfg.RecordingsDir, EventsDir: filepath.Join(cfg.DataDir, "events"), Store: state, Logger: logger, Interval: cfg.RetentionInterval}).Run(ctx)
 	go pruneSessions(ctx, state, logger)
 
 	serverErr := make(chan error, 1)

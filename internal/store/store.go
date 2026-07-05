@@ -33,11 +33,13 @@ type diskState struct {
 	UploadQueue  map[string]model.UploadJob      `json:"upload_queue"`
 	SFTPProfiles map[string]encryptedSFTPProfile `json:"sftp_profiles"`
 	Retention    model.RetentionPolicy           `json:"retention"`
+	Events       map[string]model.DetectionEvent `json:"events"`
 }
 
 type encryptedCamera struct {
 	model.Camera
-	PasswordCipher string `json:"password_cipher,omitempty"`
+	PasswordCipher    string `json:"password_cipher,omitempty"`
+	SnapshotURLCipher string `json:"snapshot_url_cipher,omitempty"`
 }
 
 type encryptedSFTPProfile struct {
@@ -53,7 +55,7 @@ func Open(path string, key []byte) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{path: path, key: append([]byte(nil), key...)}
-	s.data = model.State{Version: 2, Cameras: map[string]model.Camera{}, Sessions: map[string]model.Session{}, UploadQueue: map[string]model.UploadJob{}, SFTPProfiles: map[string]model.SFTPProfile{}, Retention: model.RetentionPolicy{Value: 30, Unit: "days"}}
+	s.data = model.State{Version: 3, Cameras: map[string]model.Camera{}, Sessions: map[string]model.Session{}, UploadQueue: map[string]model.UploadJob{}, SFTPProfiles: map[string]model.SFTPProfile{}, Retention: model.RetentionPolicy{Value: 30, Unit: "days"}, Events: map[string]model.DetectionEvent{}}
 	if err := s.load(); err != nil {
 		return nil, err
 	}
@@ -84,9 +86,12 @@ func (s *Store) load() error {
 	if d.SFTPProfiles == nil {
 		d.SFTPProfiles = map[string]encryptedSFTPProfile{}
 	}
-	state := model.State{Version: d.Version, Cameras: map[string]model.Camera{}, Sessions: d.Sessions, UploadQueue: d.UploadQueue, SFTPProfiles: map[string]model.SFTPProfile{}, Retention: d.Retention}
-	if state.Version < 2 {
-		state.Version = 2
+	if d.Events == nil {
+		d.Events = map[string]model.DetectionEvent{}
+	}
+	state := model.State{Version: d.Version, Cameras: map[string]model.Camera{}, Sessions: d.Sessions, UploadQueue: d.UploadQueue, SFTPProfiles: map[string]model.SFTPProfile{}, Retention: d.Retention, Events: d.Events}
+	if state.Version < 3 {
+		state.Version = 3
 	}
 	if state.Retention.Value < 1 || (state.Retention.Unit != "days" && state.Retention.Unit != "months" && state.Retention.Unit != "years") {
 		state.Retention = model.RetentionPolicy{Value: 30, Unit: "days"}
@@ -96,9 +101,16 @@ func (s *Store) load() error {
 		if ec.PasswordCipher != "" {
 			plain, err := s.decrypt(ec.PasswordCipher)
 			if err != nil {
-				return fmt.Errorf("descifrar cámara %s: %w", id, err)
+				return fmt.Errorf("descifrar contraseña de cámara %s: %w", id, err)
 			}
 			c.Password = plain
+		}
+		if ec.SnapshotURLCipher != "" {
+			plain, err := s.decrypt(ec.SnapshotURLCipher)
+			if err != nil {
+				return fmt.Errorf("descifrar snapshot de cámara %s: %w", id, err)
+			}
+			c.SnapshotURL = plain
 		}
 		state.Cameras[id] = c
 	}
@@ -334,17 +346,104 @@ func (s *Store) SaveRetention(policy model.RetentionPolicy) error {
 	return nil
 }
 
+func (s *Store) SaveDetectionEvent(event model.DetectionEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous, existed := s.data.Events[event.ID]
+	s.data.Events[event.ID] = event
+	if err := s.persistLocked(); err != nil {
+		if existed {
+			s.data.Events[event.ID] = previous
+		} else {
+			delete(s.data.Events, event.ID)
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Store) DetectionEvents(cameraID string, limit int) []model.DetectionEvent {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if limit < 1 || limit > 1000 {
+		limit = 200
+	}
+	out := make([]model.DetectionEvent, 0, len(s.data.Events))
+	for _, event := range s.data.Events {
+		if cameraID == "" || event.CameraID == cameraID {
+			out = append(out, event)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+func (s *Store) DetectionEvent(id string) (model.DetectionEvent, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	event, ok := s.data.Events[id]
+	return event, ok
+}
+
+func (s *Store) DetectionEventsBefore(cutoff time.Time) []model.DetectionEvent {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]model.DetectionEvent, 0)
+	for _, event := range s.data.Events {
+		if event.CreatedAt.Before(cutoff) {
+			out = append(out, event)
+		}
+	}
+	return out
+}
+
+func (s *Store) DeleteDetectionEvents(ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removed := make(map[string]model.DetectionEvent, len(ids))
+	for _, id := range ids {
+		if event, ok := s.data.Events[id]; ok {
+			removed[id] = event
+			delete(s.data.Events, id)
+		}
+	}
+	if len(removed) == 0 {
+		return nil
+	}
+	if err := s.persistLocked(); err != nil {
+		for id, event := range removed {
+			s.data.Events[id] = event
+		}
+		return err
+	}
+	return nil
+}
+
 func (s *Store) persistLocked() error {
-	d := diskState{Version: s.data.Version, Cameras: map[string]encryptedCamera{}, Sessions: s.data.Sessions, UploadQueue: s.data.UploadQueue, SFTPProfiles: map[string]encryptedSFTPProfile{}, Retention: s.data.Retention}
+	d := diskState{Version: s.data.Version, Cameras: map[string]encryptedCamera{}, Sessions: s.data.Sessions, UploadQueue: s.data.UploadQueue, SFTPProfiles: map[string]encryptedSFTPProfile{}, Retention: s.data.Retention, Events: s.data.Events}
 	for id, c := range s.data.Cameras {
 		ec := encryptedCamera{Camera: c}
 		ec.Password = ""
+		ec.SnapshotURL = ""
 		if c.Password != "" {
 			enc, err := s.encrypt(c.Password)
 			if err != nil {
 				return err
 			}
 			ec.PasswordCipher = enc
+		}
+		if c.SnapshotURL != "" {
+			enc, err := s.encrypt(c.SnapshotURL)
+			if err != nil {
+				return err
+			}
+			ec.SnapshotURLCipher = enc
 		}
 		d.Cameras[id] = ec
 	}

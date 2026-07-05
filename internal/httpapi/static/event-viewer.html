@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="es" data-bs-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#4e73df">
+  <title>Evento · Fragata</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="/static/styles.css?v=0.8.1">
+</head>
+<body>
+  <fragata-app-layout page-title="Detalle del evento" page-icon="bi-play-btn" active="events">
+    <section class="viewer-heading">
+      <nav aria-label="breadcrumb">
+        <ol class="breadcrumb small mb-2">
+          <li class="breadcrumb-item"><a href="/">Dashboard</a></li>
+          <li class="breadcrumb-item"><a href="/events">Eventos</a></li>
+          <li class="breadcrumb-item active" aria-current="page">Detalle</li>
+        </ol>
+      </nav>
+      <div class="d-flex flex-wrap align-items-start justify-content-between gap-3">
+        <div>
+          <span id="eventType" class="badge text-bg-secondary mb-2">Evento</span>
+          <h2 id="eventTitle" class="mb-1">Cargando evento…</h2>
+          <p id="eventSubtitle" class="text-body-secondary mb-0"></p>
+        </div>
+        <a href="/events" class="btn btn-outline-secondary"><i class="bi bi-arrow-left me-2"></i>Volver a eventos</a>
+      </div>
+    </section>
+
+    <section id="recordingCard" class="card dashboard-card mb-4">
+      <div class="card-header bg-transparent border-0 px-4 pt-4 pb-0">
+        <span class="section-kicker">Grabación relacionada</span>
+        <h3 class="h5 mb-1">Video del evento</h3>
+        <p id="recordingDescription" class="text-body-secondary mb-0">Buscando el segmento correspondiente…</p>
+      </div>
+      <div class="card-body p-4">
+        <div id="eventVideoStage" class="event-video-stage is-loading">
+          <video id="eventVideo" controls muted playsinline preload="metadata"></video>
+          <div id="eventVideoLoading" class="event-video-loading" role="status" aria-live="polite">
+            <span class="spinner-border text-light" aria-hidden="true"></span>
+            <strong id="eventVideoMessage">Preparando video…</strong>
+          </div>
+        </div>
+        <div id="recordingUnavailable" class="empty-state compact hidden">
+          <i class="bi bi-camera-reels"></i>
+          <h4 id="recordingUnavailableTitle">Sin grabación relacionada</h4>
+          <p id="recordingUnavailableMessage">Este evento se registró cuando la grabación no estaba activa.</p>
+        </div>
+        <div id="recordingActions" class="d-flex flex-wrap align-items-center justify-content-between gap-3 mt-3 hidden">
+          <div id="eventPosition" class="small text-body-secondary"></div>
+          <div class="d-flex flex-wrap gap-2">
+            <a id="downloadRecording" class="btn btn-outline-secondary btn-sm" href="#"><i class="bi bi-download me-2"></i>Descargar MKV original</a>
+            <button id="eventFullscreen" class="btn btn-primary btn-sm" type="button"><i class="bi bi-arrows-fullscreen me-2"></i>Pantalla completa</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="row g-4 mb-4">
+      <div class="col-12 col-xl-8">
+        <article class="card dashboard-card h-100">
+          <div class="card-header bg-transparent border-0 px-4 pt-4 pb-0">
+            <span class="section-kicker">Captura original</span>
+            <h3 class="h5 mb-1">Imagen del evento</h3>
+            <p class="text-body-secondary mb-0">Se muestra la imagen original entregada por la cámara, sin recortes ni compresión adicional.</p>
+          </div>
+          <div class="card-body p-4">
+            <div id="eventSnapshotStage" class="event-snapshot-stage">
+              <img id="eventSnapshot" alt="Captura del evento" class="hidden">
+              <div id="eventSnapshotEmpty" class="event-preview-empty"><i class="bi bi-image"></i></div>
+            </div>
+            <div class="d-flex justify-content-end mt-3">
+              <a id="openSnapshotOriginal" class="btn btn-outline-secondary btn-sm hidden" href="#" target="_blank" rel="noopener"><i class="bi bi-box-arrow-up-right me-2"></i>Abrir imagen original</a>
+            </div>
+          </div>
+        </article>
+      </div>
+      <div class="col-12 col-xl-4">
+        <article class="card dashboard-card h-100">
+          <div class="card-header bg-transparent border-0 px-4 pt-4 pb-0">
+            <span class="section-kicker">Información</span>
+            <h3 class="h5 mb-1">Detalles</h3>
+          </div>
+          <div class="card-body p-4">
+            <dl class="event-detail-list mb-0">
+              <div><dt>Cámara</dt><dd id="detailCamera">—</dd></div>
+              <div><dt>Fecha y hora</dt><dd id="detailDate">—</dd></div>
+              <div><dt>Tipo</dt><dd id="detailType">—</dd></div>
+              <div><dt>Movimiento</dt><dd id="detailMotion">—</dd></div>
+              <div><dt>Confianza humana</dt><dd id="detailConfidence">—</dd></div>
+              <div><dt>Resolución de captura</dt><dd id="detailResolution">—</dd></div>
+            </dl>
+            <a id="openCamera" class="btn btn-outline-primary w-100 mt-4" href="/cameras"><i class="bi bi-camera-video me-2"></i>Abrir cámara en vivo</a>
+          </div>
+        </article>
+      </div>
+    </section>
+  </fragata-app-layout>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
+  <script src="/static/layouts.js?v=0.8.1" defer></script>
+  <script src="/static/core.js?v=0.8.1" defer></script>
+  <script src="/static/event-viewer.js?v=0.8.1" defer></script>
+</body>
+</html>

@@ -14,15 +14,17 @@ import (
 )
 
 type Cleaner struct {
-	BaseDir  string
-	Store    *store.Store
-	Logger   *slog.Logger
-	Interval time.Duration
+	BaseDir   string
+	EventsDir string
+	Store     *store.Store
+	Logger    *slog.Logger
+	Interval  time.Duration
 }
 
 type Result struct {
-	Deleted int   `json:"deleted"`
-	Freed   int64 `json:"freed_bytes"`
+	Deleted               int   `json:"deleted"`
+	Freed                 int64 `json:"freed_bytes"`
+	EventSnapshotsDeleted int   `json:"event_snapshots_deleted"`
 }
 
 func (c Cleaner) Run(ctx context.Context) {
@@ -103,10 +105,55 @@ func (c Cleaner) Cleanup(now time.Time) Result {
 		c.Logger.Warn("retention scan failed", "error", err)
 	}
 	removeEmptyDirectories(c.BaseDir)
+	result.EventSnapshotsDeleted = c.cleanupEvents(cutoff)
 	if result.Deleted > 0 && c.Logger != nil {
 		c.Logger.Info("retention cleanup completed", "files", result.Deleted, "bytes", result.Freed, "cutoff", cutoff.UTC())
 	}
 	return result
+}
+
+func (c Cleaner) cleanupEvents(cutoff time.Time) int {
+	if c.Store == nil || strings.TrimSpace(c.EventsDir) == "" {
+		return 0
+	}
+	root, err := filepath.Abs(c.EventsDir)
+	if err != nil {
+		return 0
+	}
+	removedIDs := make([]string, 0)
+	deleted := 0
+	for _, event := range c.Store.DetectionEventsBefore(cutoff) {
+		if event.SnapshotPath == "" {
+			removedIDs = append(removedIDs, event.ID)
+			continue
+		}
+		relative := filepath.FromSlash(event.SnapshotPath)
+		parts := strings.Split(filepath.ToSlash(relative), "/")
+		if len(parts) > 0 && parts[0] == "events" {
+			relative = filepath.Join(parts[1:]...)
+		}
+		absolute, err := filepath.Abs(filepath.Join(root, relative))
+		if err != nil || (absolute != root && !strings.HasPrefix(absolute, root+string(os.PathSeparator))) {
+			continue
+		}
+		err = os.Remove(absolute)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			if c.Logger != nil {
+				c.Logger.Warn("retention could not remove event snapshot", "path", absolute, "error", err)
+			}
+			continue
+		}
+		removedIDs = append(removedIDs, event.ID)
+		deleted++
+	}
+	if err := c.Store.DeleteDetectionEvents(removedIDs); err != nil {
+		if c.Logger != nil {
+			c.Logger.Warn("retention could not prune event metadata", "error", err)
+		}
+		return 0
+	}
+	removeEmptyDirectories(root)
+	return deleted
 }
 
 func removeEmptyDirectories(base string) {

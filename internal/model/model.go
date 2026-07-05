@@ -13,69 +13,87 @@ const (
 )
 
 type Camera struct {
-	ID                     string    `json:"id"`
-	Name                   string    `json:"name"`
-	Host                   string    `json:"host"`
-	Username               string    `json:"username,omitempty"`
-	Password               string    `json:"password,omitempty"`
-	RTSPURL                string    `json:"rtsp_url"`
-	LiveRTSPURL            string    `json:"live_rtsp_url,omitempty"`
-	ProfileToken           string    `json:"profile_token,omitempty"`
-	LiveProfileToken       string    `json:"live_profile_token,omitempty"`
-	Manufacturer           string    `json:"manufacturer,omitempty"`
-	Model                  string    `json:"model,omitempty"`
-	SerialNumber           string    `json:"serial_number,omitempty"`
-	FirmwareVersion        string    `json:"firmware_version,omitempty"`
-	Codec                  string    `json:"codec,omitempty"`
-	Width                  int       `json:"width,omitempty"`
-	Height                 int       `json:"height,omitempty"`
-	LiveCodec              string    `json:"live_codec,omitempty"`
-	LiveWidth              int       `json:"live_width,omitempty"`
-	LiveHeight             int       `json:"live_height,omitempty"`
-	FolderName             string    `json:"folder_name"`
-	Enabled                bool      `json:"enabled"`
-	Record                 bool      `json:"record"`
-	SegmentDurationSeconds int64     `json:"segment_duration_seconds"`
-	Upload                 bool      `json:"upload"`
-	SFTPProfileID          string    `json:"sftp_profile_id,omitempty"`
-	AudioCodec             string    `json:"audio_codec,omitempty"`
-	AudioSampleRate        int       `json:"audio_sample_rate,omitempty"`
-	AudioChannels          int       `json:"audio_channels,omitempty"`
-	CreatedAt              time.Time `json:"created_at"`
-	UpdatedAt              time.Time `json:"updated_at"`
+	ID                     string        `json:"id"`
+	Name                   string        `json:"name"`
+	Host                   string        `json:"host"`
+	Username               string        `json:"username,omitempty"`
+	Password               string        `json:"password,omitempty"`
+	RTSPURL                string        `json:"rtsp_url"`
+	LiveRTSPURL            string        `json:"live_rtsp_url,omitempty"`
+	ProfileToken           string        `json:"profile_token,omitempty"`
+	LiveProfileToken       string        `json:"live_profile_token,omitempty"`
+	Manufacturer           string        `json:"manufacturer,omitempty"`
+	Model                  string        `json:"model,omitempty"`
+	SerialNumber           string        `json:"serial_number,omitempty"`
+	FirmwareVersion        string        `json:"firmware_version,omitempty"`
+	Codec                  string        `json:"codec,omitempty"`
+	Width                  int           `json:"width,omitempty"`
+	Height                 int           `json:"height,omitempty"`
+	LiveCodec              string        `json:"live_codec,omitempty"`
+	LiveWidth              int           `json:"live_width,omitempty"`
+	LiveHeight             int           `json:"live_height,omitempty"`
+	FolderName             string        `json:"folder_name"`
+	Enabled                bool          `json:"enabled"`
+	Record                 bool          `json:"record"`
+	SegmentDurationSeconds int64         `json:"segment_duration_seconds"`
+	Upload                 bool          `json:"upload"`
+	SFTPProfileID          string        `json:"sftp_profile_id,omitempty"`
+	AudioCodec             string        `json:"audio_codec,omitempty"`
+	AudioSampleRate        int           `json:"audio_sample_rate,omitempty"`
+	AudioChannels          int           `json:"audio_channels,omitempty"`
+	SnapshotURL            string        `json:"snapshot_url,omitempty"`
+	DetectionEnabled       bool          `json:"detection_enabled"`
+	DetectMotion           bool          `json:"detect_motion"`
+	DetectPerson           bool          `json:"detect_person"`
+	MotionSensitivity      int           `json:"motion_sensitivity"`
+	DetectionIntervalSecs  int           `json:"detection_interval_seconds"`
+	PersonConfidence       int           `json:"person_confidence"`
+	DetectionCooldownSecs  int           `json:"detection_cooldown_seconds"`
+	DetectionZone          DetectionZone `json:"detection_zone"`
+	CreatedAt              time.Time     `json:"created_at"`
+	UpdatedAt              time.Time     `json:"updated_at"`
 }
 
 type CameraPublic struct {
-	ID                     string    `json:"id"`
-	Name                   string    `json:"name"`
-	Host                   string    `json:"host"`
-	Username               string    `json:"username,omitempty"`
-	RTSPURL                string    `json:"rtsp_url"`
-	LiveRTSPURL            string    `json:"live_rtsp_url,omitempty"`
-	ProfileToken           string    `json:"profile_token,omitempty"`
-	LiveProfileToken       string    `json:"live_profile_token,omitempty"`
-	Manufacturer           string    `json:"manufacturer,omitempty"`
-	Model                  string    `json:"model,omitempty"`
-	SerialNumber           string    `json:"serial_number,omitempty"`
-	FirmwareVersion        string    `json:"firmware_version,omitempty"`
-	Codec                  string    `json:"codec,omitempty"`
-	Width                  int       `json:"width,omitempty"`
-	Height                 int       `json:"height,omitempty"`
-	LiveCodec              string    `json:"live_codec,omitempty"`
-	LiveWidth              int       `json:"live_width,omitempty"`
-	LiveHeight             int       `json:"live_height,omitempty"`
-	FolderName             string    `json:"folder_name"`
-	HasPassword            bool      `json:"has_password"`
-	Enabled                bool      `json:"enabled"`
-	Record                 bool      `json:"record"`
-	SegmentDurationSeconds int64     `json:"segment_duration_seconds"`
-	Upload                 bool      `json:"upload"`
-	SFTPProfileID          string    `json:"sftp_profile_id,omitempty"`
-	AudioCodec             string    `json:"audio_codec,omitempty"`
-	AudioSampleRate        int       `json:"audio_sample_rate,omitempty"`
-	AudioChannels          int       `json:"audio_channels,omitempty"`
-	CreatedAt              time.Time `json:"created_at"`
-	UpdatedAt              time.Time `json:"updated_at"`
+	ID                     string        `json:"id"`
+	Name                   string        `json:"name"`
+	Host                   string        `json:"host"`
+	Username               string        `json:"username,omitempty"`
+	RTSPURL                string        `json:"rtsp_url"`
+	LiveRTSPURL            string        `json:"live_rtsp_url,omitempty"`
+	ProfileToken           string        `json:"profile_token,omitempty"`
+	LiveProfileToken       string        `json:"live_profile_token,omitempty"`
+	Manufacturer           string        `json:"manufacturer,omitempty"`
+	Model                  string        `json:"model,omitempty"`
+	SerialNumber           string        `json:"serial_number,omitempty"`
+	FirmwareVersion        string        `json:"firmware_version,omitempty"`
+	Codec                  string        `json:"codec,omitempty"`
+	Width                  int           `json:"width,omitempty"`
+	Height                 int           `json:"height,omitempty"`
+	LiveCodec              string        `json:"live_codec,omitempty"`
+	LiveWidth              int           `json:"live_width,omitempty"`
+	LiveHeight             int           `json:"live_height,omitempty"`
+	FolderName             string        `json:"folder_name"`
+	HasPassword            bool          `json:"has_password"`
+	Enabled                bool          `json:"enabled"`
+	Record                 bool          `json:"record"`
+	SegmentDurationSeconds int64         `json:"segment_duration_seconds"`
+	Upload                 bool          `json:"upload"`
+	SFTPProfileID          string        `json:"sftp_profile_id,omitempty"`
+	AudioCodec             string        `json:"audio_codec,omitempty"`
+	AudioSampleRate        int           `json:"audio_sample_rate,omitempty"`
+	AudioChannels          int           `json:"audio_channels,omitempty"`
+	SnapshotURL            string        `json:"snapshot_url,omitempty"`
+	DetectionEnabled       bool          `json:"detection_enabled"`
+	DetectMotion           bool          `json:"detect_motion"`
+	DetectPerson           bool          `json:"detect_person"`
+	MotionSensitivity      int           `json:"motion_sensitivity"`
+	DetectionIntervalSecs  int           `json:"detection_interval_seconds"`
+	PersonConfidence       int           `json:"person_confidence"`
+	DetectionCooldownSecs  int           `json:"detection_cooldown_seconds"`
+	DetectionZone          DetectionZone `json:"detection_zone"`
+	CreatedAt              time.Time     `json:"created_at"`
+	UpdatedAt              time.Time     `json:"updated_at"`
 }
 
 func (c Camera) Public() CameraPublic {
@@ -86,8 +104,66 @@ func (c Camera) Public() CameraPublic {
 		LiveCodec: c.LiveCodec, LiveWidth: c.LiveWidth, LiveHeight: c.LiveHeight, FolderName: c.FolderName, HasPassword: c.Password != "",
 		Enabled: c.Enabled, Record: c.Record, SegmentDurationSeconds: c.SegmentDurationSeconds, Upload: c.Upload,
 		SFTPProfileID: c.SFTPProfileID, AudioCodec: c.AudioCodec, AudioSampleRate: c.AudioSampleRate, AudioChannels: c.AudioChannels,
-		CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
+		SnapshotURL: RedactURL(c.SnapshotURL), DetectionEnabled: c.DetectionEnabled, DetectMotion: c.DetectMotion, DetectPerson: c.DetectPerson,
+		MotionSensitivity: c.MotionSensitivity, DetectionIntervalSecs: c.DetectionIntervalSecs, PersonConfidence: c.PersonConfidence,
+		DetectionCooldownSecs: c.DetectionCooldownSecs, DetectionZone: c.DetectionZone, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
 	}
+}
+
+// DetectionZone defines a normalized rectangular analysis area in percentages.
+// A zero width or height means the complete image.
+type DetectionZone struct {
+	X      int `json:"x"`
+	Y      int `json:"y"`
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
+func (z DetectionZone) Normalized() DetectionZone {
+	if z.Width <= 0 || z.Height <= 0 {
+		return DetectionZone{Width: 100, Height: 100}
+	}
+	if z.X < 0 {
+		z.X = 0
+	}
+	if z.Y < 0 {
+		z.Y = 0
+	}
+	if z.X > 99 {
+		z.X = 99
+	}
+	if z.Y > 99 {
+		z.Y = 99
+	}
+	if z.Width < 1 {
+		z.Width = 1
+	}
+	if z.Height < 1 {
+		z.Height = 1
+	}
+	if z.X+z.Width > 100 {
+		z.Width = 100 - z.X
+	}
+	if z.Y+z.Height > 100 {
+		z.Height = 100 - z.Y
+	}
+	return z
+}
+
+type DetectionEvent struct {
+	ID                    string    `json:"id"`
+	CameraID              string    `json:"camera_id"`
+	CameraName            string    `json:"camera_name"`
+	Type                  string    `json:"type"`
+	Confidence            float64   `json:"confidence,omitempty"`
+	MotionScore           float64   `json:"motion_score,omitempty"`
+	SnapshotPath          string    `json:"snapshot_path,omitempty"`
+	SnapshotWidth         int       `json:"snapshot_width,omitempty"`
+	SnapshotHeight        int       `json:"snapshot_height,omitempty"`
+	RecordingPath         string    `json:"recording_path,omitempty"`
+	RecordingStartedAt    time.Time `json:"recording_started_at,omitempty"`
+	RecordingOffsetMillis int64     `json:"recording_offset_millis,omitempty"`
+	CreatedAt             time.Time `json:"created_at"`
 }
 
 type Session struct {
@@ -213,25 +289,51 @@ type RuntimeStatus struct {
 	AudioCodec       string    `json:"audio_codec,omitempty"`
 	AudioSampleRate  int       `json:"audio_sample_rate,omitempty"`
 	AudioChannels    int       `json:"audio_channels,omitempty"`
+	DetectionState   string    `json:"detection_state,omitempty"`
+	LastDetectionAt  time.Time `json:"last_detection_at,omitempty"`
+	LastEventType    string    `json:"last_event_type,omitempty"`
+	LastMotionScore  float64   `json:"last_motion_score,omitempty"`
 }
 
 type State struct {
-	Version      int                    `json:"version"`
-	Cameras      map[string]Camera      `json:"cameras"`
-	Sessions     map[string]Session     `json:"sessions"`
-	UploadQueue  map[string]UploadJob   `json:"upload_queue"`
-	SFTPProfiles map[string]SFTPProfile `json:"sftp_profiles"`
-	Retention    RetentionPolicy        `json:"retention"`
+	Version      int                       `json:"version"`
+	Cameras      map[string]Camera         `json:"cameras"`
+	Sessions     map[string]Session        `json:"sessions"`
+	UploadQueue  map[string]UploadJob      `json:"upload_queue"`
+	SFTPProfiles map[string]SFTPProfile    `json:"sftp_profiles"`
+	Retention    RetentionPolicy           `json:"retention"`
+	Events       map[string]DetectionEvent `json:"events"`
 }
 
 var urlPattern = regexp.MustCompile(`(?i)(?:rtsp|rtsps|http|https)://[^\s"'<>]+`)
 
 func RedactURL(raw string) string {
 	u, err := url.Parse(raw)
-	if err != nil || u.User == nil {
+	if err != nil {
 		return raw
 	}
-	u.User = url.UserPassword("***", "***")
+	changed := false
+	if u.User != nil {
+		u.User = url.UserPassword("***", "***")
+		changed = true
+	}
+	query := u.Query()
+	for key, values := range query {
+		lower := strings.ToLower(key)
+		if !strings.Contains(lower, "pass") && !strings.Contains(lower, "pwd") && !strings.Contains(lower, "token") &&
+			!strings.Contains(lower, "secret") && !strings.Contains(lower, "auth") && !strings.Contains(lower, "session") && lower != "key" && !strings.HasSuffix(lower, "_key") {
+			continue
+		}
+		for index := range values {
+			values[index] = "***"
+		}
+		query[key] = values
+		changed = true
+	}
+	if !changed {
+		return raw
+	}
+	u.RawQuery = query.Encode()
 	return u.String()
 }
 

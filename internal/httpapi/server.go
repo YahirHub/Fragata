@@ -13,6 +13,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -60,6 +62,8 @@ func New(cfg config.Config, authManager *auth.Manager, cameras *camera.Manager, 
 	protected.HandleFunc("GET /cameras/new", s.newCameraPage)
 	protected.HandleFunc("GET /cameras/{id}/settings", s.cameraSettingsPage)
 	protected.HandleFunc("GET /camera/{id}", s.cameraPage)
+	protected.HandleFunc("GET /events", s.eventsPage)
+	protected.HandleFunc("GET /events/{id}", s.eventPage)
 	protected.HandleFunc("GET /settings/sftp", s.sftpSettingsPage)
 	protected.HandleFunc("GET /settings/storage", s.storageSettingsPage)
 	protected.HandleFunc("GET /api/session", s.session)
@@ -75,6 +79,11 @@ func New(cfg config.Config, authManager *auth.Manager, cameras *camera.Manager, 
 	protected.HandleFunc("DELETE /api/cameras/{id}", s.deleteCamera)
 	protected.HandleFunc("POST /api/discovery", s.discovery)
 	protected.HandleFunc("GET /api/status", s.status)
+	protected.HandleFunc("GET /api/events", s.listDetectionEvents)
+	protected.HandleFunc("GET /api/events/{id}", s.getDetectionEvent)
+	protected.HandleFunc("GET /api/events/{id}/snapshot", s.detectionEventSnapshot)
+	protected.HandleFunc("GET /api/events/{id}/video", s.detectionEventVideo)
+	protected.HandleFunc("GET /api/events/{id}/recording", s.detectionEventRecording)
 	protected.HandleFunc("GET /api/uploads", s.uploads)
 	protected.HandleFunc("GET /api/sftp-profiles", s.listSFTPProfiles)
 	protected.HandleFunc("POST /api/sftp-profiles", s.createSFTPProfile)
@@ -160,6 +169,19 @@ func (s *Server) cameraPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.serveAsset(w, "viewer.html", "text/html; charset=utf-8")
+}
+
+func (s *Server) eventsPage(w http.ResponseWriter, _ *http.Request) {
+	s.serveAsset(w, "events.html", "text/html; charset=utf-8")
+}
+
+func (s *Server) eventPage(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if _, ok := s.store.DetectionEvent(id); !ok {
+		http.NotFound(w, r)
+		return
+	}
+	s.serveAsset(w, "event-viewer.html", "text/html; charset=utf-8")
 }
 
 func (s *Server) sftpSettingsPage(w http.ResponseWriter, _ *http.Request) {
@@ -283,7 +305,9 @@ func (s *Server) updateCamera(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnprocessableEntity, message)
 		case strings.Contains(message, "nombre"), strings.Contains(message, "carpeta"), strings.Contains(message, "duración"),
 			strings.Contains(message, "introduzca"), strings.Contains(message, "dirección IP"), strings.Contains(message, "puerto inválido"),
-			strings.Contains(message, "obligatorio"), strings.Contains(message, "no puede superar"):
+			strings.Contains(message, "obligatorio"), strings.Contains(message, "no puede superar"), strings.Contains(message, "snapshot"),
+			strings.Contains(message, "sensibilidad"), strings.Contains(message, "detección"), strings.Contains(message, "intervalo"),
+			strings.Contains(message, "confianza"), strings.Contains(message, "enfriamiento"), strings.Contains(message, "active movimiento"):
 			writeError(w, http.StatusBadRequest, message)
 		default:
 			writeError(w, http.StatusInternalServerError, "no se pudo actualizar la cámara")
@@ -496,6 +520,62 @@ func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
 func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.cameras.Statuses())
 }
+func (s *Server) listDetectionEvents(w http.ResponseWriter, r *http.Request) {
+	cameraID := strings.TrimSpace(r.URL.Query().Get("camera_id"))
+	limit := 200
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 && parsed <= 1000 {
+			limit = parsed
+		}
+	}
+	events := s.store.DetectionEvents(cameraID, limit)
+	out := make([]publicDetectionEvent, 0, len(events))
+	for _, event := range events {
+		out = append(out, s.publicDetectionEvent(event))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) detectionEventSnapshot(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	event, ok := s.store.DetectionEvent(id)
+	if !ok || event.SnapshotPath == "" {
+		http.NotFound(w, r)
+		return
+	}
+	eventsRoot, err := filepath.Abs(filepath.Join(s.cfg.DataDir, "events"))
+	if err != nil {
+		http.Error(w, "snapshot no disponible", http.StatusInternalServerError)
+		return
+	}
+	absolute, err := filepath.Abs(filepath.Join(s.cfg.DataDir, filepath.FromSlash(event.SnapshotPath)))
+	if err != nil || (absolute != eventsRoot && !strings.HasPrefix(absolute, eventsRoot+string(os.PathSeparator))) {
+		http.Error(w, "ruta de snapshot inválida", http.StatusBadRequest)
+		return
+	}
+	file, err := os.Open(absolute)
+	if errors.Is(err, os.ErrNotExist) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, "snapshot no disponible", http.StatusInternalServerError)
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 8<<20 {
+		http.Error(w, "snapshot no disponible", http.StatusInternalServerError)
+		return
+	}
+	header := make([]byte, 512)
+	read, _ := file.Read(header)
+	_, _ = file.Seek(0, 0)
+	w.Header().Set("Content-Type", http.DetectContentType(header[:read]))
+	w.Header().Set("Cache-Control", "private, max-age=60")
+	http.ServeContent(w, r, filepath.Base(absolute), info.ModTime(), file)
+}
+
 func (s *Server) uploads(w http.ResponseWriter, _ *http.Request) {
 	jobs := s.store.UploadJobs()
 	publicJobs := make([]model.UploadJobPublic, 0, len(jobs))
@@ -722,7 +802,7 @@ func (s *Server) updateRetention(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "no se pudo guardar la política de retención")
 		return
 	}
-	cleaner := retention.Cleaner{BaseDir: s.cfg.RecordingsDir, Store: s.store, Logger: s.logger}
+	cleaner := retention.Cleaner{BaseDir: s.cfg.RecordingsDir, EventsDir: filepath.Join(s.cfg.DataDir, "events"), Store: s.store, Logger: s.logger}
 	result := cleaner.Cleanup(time.Now())
 	writeJSON(w, http.StatusOK, map[string]any{"policy": policy, "cleanup": result})
 }

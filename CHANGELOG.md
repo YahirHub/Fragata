@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.8.1 - 2026-07-05
+
+- Vincula cada evento nuevo con el segmento MKV activo y guarda el desplazamiento exacto desde el inicio del archivo.
+- Localiza de forma compatible las grabaciones de eventos creados antes de esta versión mediante cámara, fecha, nombre del segmento y hora de finalización.
+- Agrega una página de detalle por evento con reproducción desde cinco segundos antes de la detección, captura original y metadatos.
+- Usa FFmpeg opcional para servir MP4 fragmentado compatible con navegador; conserva H.264 sin recomprimir y mantiene la resolución original al convertir H.265.
+- Permite descargar el MKV original cuando la reproducción web no está disponible.
+- Espera automáticamente a que finalice el segmento cuando el evento pertenece a una grabación todavía abierta.
+- Elimina la relación de aspecto 16:9 forzada en las miniaturas y muestra snapshots con sus dimensiones y proporción naturales.
+- Añade validación de contención de rutas para impedir acceso a archivos fuera del directorio de grabaciones.
+
+## 0.8.0 - 2026-07-05
+
+- Añade detección opcional de movimiento mediante diferencia de snapshots, compensación de iluminación y confirmación temporal en Go puro.
+- Incorpora confirmación humana beta mediante HOG/SVM con coeficientes embebidos, sin CGO, Python, OpenCV, ONNX Runtime ni archivos externos.
+- Obtiene automáticamente `GetSnapshotUri` mediante ONVIF y permite configurar una URL HTTP(S) manual restringida a la IP de la cámara.
+- Permite configurar sensibilidad, intervalo, confianza humana, enfriamiento y zona rectangular por cámara.
+- Agrega una página de eventos con miniaturas protegidas, filtros por cámara y tipo, confianza y enlace al visor.
+- Persiste eventos en el estado local y aplica a sus miniaturas la política global de retención.
+- Cifra la URL de snapshot en el estado local, oculta parámetros sensibles en la API y limita tamaño y dimensiones antes de decodificar imágenes.
+- Añade pruebas mínimas para movimiento, detector humano vacío, normalización de zonas, persistencia de eventos, validación de snapshots y limpieza.
+- Documenta los coeficientes HOG/SVM de terceros y las limitaciones de la detección humana beta.
+
 ## 0.7.1 - 2026-07-05
 
 - Separa video y audio en sesiones WebRTC independientes para que un fallo de sonido no bloquee la imagen.
