@@ -16,22 +16,27 @@ import (
 )
 
 type Config struct {
-	ListenAddress      string
-	DataDir            string
-	RecordingsDir      string
-	SegmentDuration    time.Duration
-	ShutdownTimeout    time.Duration
-	SessionDuration    time.Duration
-	AdminUser          string
-	AdminPassword      string
-	SecureCookies      bool
-	AllowPublicCameras bool
-	DiscoveryTimeout   time.Duration
-	ProbeTimeout       time.Duration
-	STUNServers        []string
-	MaxViewers         int
-	SecretKey          []byte
-	SFTP               SFTPConfig
+	ListenAddress        string
+	DataDir              string
+	RecordingsDir        string
+	SegmentDuration      time.Duration
+	ShutdownTimeout      time.Duration
+	SessionDuration      time.Duration
+	AdminUser            string
+	AdminPassword        string
+	SecureCookies        bool
+	AllowPublicCameras   bool
+	DiscoveryTimeout     time.Duration
+	ProbeTimeout         time.Duration
+	RTSPConnectTimeout   time.Duration
+	RTSPCandidateTimeout time.Duration
+	RTSPPorts            []int
+	RTSPMaxCandidates    int
+	RTSPDictionaryPath   string
+	STUNServers          []string
+	MaxViewers           int
+	SecretKey            []byte
+	SFTP                 SFTPConfig
 }
 
 type SFTPConfig struct {
@@ -57,20 +62,25 @@ func Load(dotenvPath string) (Config, error) {
 
 	dataDir := env("FRAGATA_DATA_DIR", "./data")
 	cfg := Config{
-		ListenAddress:      env("FRAGATA_LISTEN", ":8080"),
-		DataDir:            dataDir,
-		RecordingsDir:      env("FRAGATA_RECORDINGS_DIR", filepath.Join(dataDir, "recordings")),
-		SegmentDuration:    envDuration("FRAGATA_SEGMENT_DURATION", 5*time.Minute),
-		ShutdownTimeout:    envDuration("FRAGATA_SHUTDOWN_TIMEOUT", 20*time.Second),
-		SessionDuration:    envDuration("FRAGATA_SESSION_DURATION", 30*24*time.Hour),
-		AdminUser:          strings.TrimSpace(os.Getenv("FRAGATA_ADMIN_USER")),
-		AdminPassword:      os.Getenv("FRAGATA_ADMIN_PASSWORD"),
-		SecureCookies:      envBool("FRAGATA_SECURE_COOKIES", false),
-		AllowPublicCameras: envBool("FRAGATA_ALLOW_PUBLIC_CAMERAS", false),
-		DiscoveryTimeout:   envDuration("FRAGATA_DISCOVERY_TIMEOUT", 4*time.Second),
-		ProbeTimeout:       envDuration("FRAGATA_PROBE_TIMEOUT", 6*time.Second),
-		STUNServers:        envList("FRAGATA_STUN_SERVERS", nil),
-		MaxViewers:         envInt("FRAGATA_MAX_VIEWERS", 32),
+		ListenAddress:        env("FRAGATA_LISTEN", ":8080"),
+		DataDir:              dataDir,
+		RecordingsDir:        env("FRAGATA_RECORDINGS_DIR", filepath.Join(dataDir, "recordings")),
+		SegmentDuration:      envDuration("FRAGATA_SEGMENT_DURATION", 5*time.Minute),
+		ShutdownTimeout:      envDuration("FRAGATA_SHUTDOWN_TIMEOUT", 20*time.Second),
+		SessionDuration:      envDuration("FRAGATA_SESSION_DURATION", 30*24*time.Hour),
+		AdminUser:            strings.TrimSpace(os.Getenv("FRAGATA_ADMIN_USER")),
+		AdminPassword:        os.Getenv("FRAGATA_ADMIN_PASSWORD"),
+		SecureCookies:        envBool("FRAGATA_SECURE_COOKIES", false),
+		AllowPublicCameras:   envBool("FRAGATA_ALLOW_PUBLIC_CAMERAS", false),
+		DiscoveryTimeout:     envDuration("FRAGATA_DISCOVERY_TIMEOUT", 4*time.Second),
+		ProbeTimeout:         envDuration("FRAGATA_PROBE_TIMEOUT", 6*time.Second),
+		RTSPConnectTimeout:   envDuration("FRAGATA_RTSP_CONNECT_TIMEOUT", 1200*time.Millisecond),
+		RTSPCandidateTimeout: envDuration("FRAGATA_RTSP_CANDIDATE_TIMEOUT", 3*time.Second),
+		RTSPPorts:            envIntList("FRAGATA_RTSP_PORTS", []int{554, 8554, 10554, 7070, 7447, 8555, 88, 80}),
+		RTSPMaxCandidates:    envInt("FRAGATA_RTSP_MAX_CANDIDATES", 160),
+		RTSPDictionaryPath:   strings.TrimSpace(os.Getenv("FRAGATA_RTSP_DICTIONARY")),
+		STUNServers:          envList("FRAGATA_STUN_SERVERS", nil),
+		MaxViewers:           envInt("FRAGATA_MAX_VIEWERS", 32),
 		SFTP: SFTPConfig{
 			Enabled:        envBool("FRAGATA_SFTP_ENABLED", false),
 			Host:           strings.TrimSpace(os.Getenv("FRAGATA_SFTP_HOST")),
@@ -95,6 +105,15 @@ func Load(dotenvPath string) (Config, error) {
 	}
 	if cfg.MaxViewers < 1 || cfg.MaxViewers > 256 {
 		return Config{}, errors.New("FRAGATA_MAX_VIEWERS debe estar entre 1 y 256")
+	}
+	if cfg.RTSPConnectTimeout < 100*time.Millisecond || cfg.RTSPConnectTimeout > 10*time.Second {
+		return Config{}, errors.New("FRAGATA_RTSP_CONNECT_TIMEOUT debe estar entre 100ms y 10s")
+	}
+	if cfg.RTSPCandidateTimeout < time.Second || cfg.RTSPCandidateTimeout > 30*time.Second {
+		return Config{}, errors.New("FRAGATA_RTSP_CANDIDATE_TIMEOUT debe estar entre 1s y 30s")
+	}
+	if cfg.RTSPMaxCandidates < 1 || cfg.RTSPMaxCandidates > 512 {
+		return Config{}, errors.New("FRAGATA_RTSP_MAX_CANDIDATES debe estar entre 1 y 512")
 	}
 	if cfg.SFTP.Workers < 1 || cfg.SFTP.Workers > 8 {
 		return Config{}, errors.New("FRAGATA_SFTP_WORKERS debe estar entre 1 y 8")
@@ -252,6 +271,30 @@ func envList(k string, def []string) []string {
 		if p = strings.TrimSpace(p); p != "" {
 			out = append(out, p)
 		}
+	}
+	return out
+}
+
+func envIntList(k string, def []int) []int {
+	v, ok := os.LookupEnv(k)
+	if !ok || strings.TrimSpace(v) == "" {
+		return append([]int(nil), def...)
+	}
+	seen := make(map[int]struct{})
+	out := make([]int, 0)
+	for _, raw := range strings.Split(v, ",") {
+		n, err := strconv.Atoi(strings.TrimSpace(raw))
+		if err != nil || n < 1 || n > 65535 {
+			continue
+		}
+		if _, exists := seen[n]; exists {
+			continue
+		}
+		seen[n] = struct{}{}
+		out = append(out, n)
+	}
+	if len(out) == 0 {
+		return append([]int(nil), def...)
 	}
 	return out
 }

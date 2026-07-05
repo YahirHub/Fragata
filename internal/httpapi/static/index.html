@@ -13,19 +13,32 @@
   </header>
   <main class="layout">
     <section class="panel add-panel">
-      <div class="section-head"><div><h1>Agregar cámara</h1><p>Introduce solo la IP y las credenciales. Fragata intentará ONVIF y después rutas RTSP conocidas.</p></div><button id="discoverButton" class="secondary">Detectar en red</button></div>
+      <div class="section-head">
+        <div>
+          <h1>Agregar cámara</h1>
+          <p>Introduce la IP y las credenciales. Fragata consultará ONVIF y después probará puertos y rutas RTSP conocidas.</p>
+        </div>
+        <button id="discoverButton" class="secondary">Detectar en red</button>
+      </div>
       <div id="discoveryResults" class="discovery hidden"></div>
       <form id="cameraForm" class="camera-form">
         <label>Nombre<input name="name" placeholder="Oficina"></label>
-        <label>IP de la cámara<input name="host" required inputmode="decimal" placeholder="192.168.1.100"></label>
+        <label>IP de la cámara<input name="host" inputmode="decimal" placeholder="192.168.10.50"></label>
         <label>Usuario<input name="username" placeholder="admin" autocomplete="username"></label>
         <label>Contraseña<input name="password" type="password" autocomplete="current-password" placeholder="Contraseña del dispositivo"></label>
-        <label class="wide">URL RTSP opcional<input name="rtsp_url" placeholder="Fragata la detectará automáticamente"></label>
+        <label class="wide">
+          URL RTSP manual
+          <div class="input-action">
+            <input name="rtsp_url" placeholder="rtsp://192.168.10.50:554/cam/realmonitor?channel=1&subtype=0">
+            <button type="button" id="probeRTSPButton" class="secondary">Probar URL</button>
+          </div>
+          <small>Es opcional. Puedes pegar la URL completa; se comprobará antes de guardarla. Es más seguro escribir usuario y contraseña en sus campos separados.</small>
+        </label>
         <div class="checks wide">
           <label><input name="record" type="checkbox" checked> Grabar en MKV</label>
           <label><input name="upload" type="checkbox"> Subir por SFTP</label>
         </div>
-        <div class="wide form-actions"><button type="submit" class="primary">Detectar y agregar</button><span id="formStatus" role="status"></span></div>
+        <div class="wide form-actions"><button type="submit" class="primary">Detectar y guardar</button><span id="formStatus" role="status"></span></div>
       </form>
     </section>
 

@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
-	"time"
 
 	"fragata/internal/config"
 	"fragata/internal/model"
@@ -27,49 +28,44 @@ type AddRequest struct {
 	InsecureTLS bool   `json:"insecure_tls,omitempty"`
 }
 
+type ProbeRequest struct {
+	Host     string `json:"host"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	RTSPURL  string `json:"rtsp_url"`
+}
+
+type ProbeResponse struct {
+	Host    string `json:"host"`
+	RTSPURL string `json:"rtsp_url"`
+	Codec   string `json:"codec"`
+	Port    int    `json:"port"`
+}
+
 type DetectionResult struct {
-	Camera model.Camera `json:"camera"`
-	Method string       `json:"method"`
+	Camera      model.Camera           `json:"camera"`
+	Method      string                 `json:"method"`
+	Diagnostics *fragrtsp.SearchReport `json:"diagnostics,omitempty"`
 }
 
 func Detect(ctx context.Context, cfg config.Config, request AddRequest) (DetectionResult, error) {
-	host := strings.TrimSpace(request.Host)
-	rawURL := strings.TrimSpace(request.RTSPURL)
-	if host == "" && rawURL != "" {
-		u, err := url.Parse(rawURL)
-		if err != nil {
-			return DetectionResult{}, errors.New("URL RTSP inválida")
-		}
-		host = u.Hostname()
-	}
-	if err := cfg.ValidateCameraIP(host); err != nil {
+	base, rawURL, requestedPort, err := prepareCamera(cfg, request)
+	if err != nil {
 		return DetectionResult{}, err
-	}
-	base := model.Camera{
-		Name: strings.TrimSpace(request.Name), Host: host, Username: strings.TrimSpace(request.Username), Password: request.Password,
-		Enabled: boolValue(request.Enabled, true), Record: boolValue(request.Record, true), Upload: boolValue(request.Upload, cfg.SFTP.Enabled),
-	}
-	if base.Name == "" {
-		base.Name = "Cámara " + host
 	}
 
 	if rawURL != "" {
-		normalized := fragrtsp.NormalizeHost(rawURL, host)
-		withAuth, err := fragrtsp.WithCredentials(normalized, base.Username, base.Password)
+		probe, err := probeManual(ctx, cfg, base, rawURL)
 		if err != nil {
 			return DetectionResult{}, err
 		}
-		probe, err := fragrtsp.Probe(ctx, withAuth, cfg.ProbeTimeout)
-		if err != nil {
-			return DetectionResult{}, fmt.Errorf("no se pudo abrir la URL RTSP: %w", err)
-		}
-		base.RTSPURL = probe.URL
+		base.RTSPURL = probe.RTSPURL
 		base.Codec = probe.Codec
 		return DetectionResult{Camera: base, Method: "rtsp-manual"}, nil
 	}
 
 	onvifClient := onvif.NewClient(cfg.ProbeTimeout, base.Username, base.Password, request.InsecureTLS)
-	inspection, onvifErr := onvifClient.Inspect(ctx, host)
+	inspection, onvifErr := onvifClient.Inspect(ctx, base.Host)
 	if onvifErr == nil {
 		profiles := append([]onvif.Profile(nil), inspection.Profiles...)
 		sort.SliceStable(profiles, func(i, j int) bool {
@@ -86,7 +82,7 @@ func Detect(ctx context.Context, cfg config.Config, request AddRequest) (Detecti
 			if streamURL == "" {
 				continue
 			}
-			streamURL = fragrtsp.NormalizeHost(streamURL, host)
+			streamURL = fragrtsp.NormalizeHost(streamURL, base.Host)
 			withAuth, err := fragrtsp.WithCredentials(streamURL, base.Username, base.Password)
 			if err != nil {
 				last = err
@@ -115,51 +111,148 @@ func Detect(ctx context.Context, cfg config.Config, request AddRequest) (Detecti
 		}
 	}
 
-	candidateTimeout := cfg.ProbeTimeout
-	if candidateTimeout > 3*time.Second {
-		candidateTimeout = 3 * time.Second
+	ports := append([]int(nil), cfg.RTSPPorts...)
+	if requestedPort > 0 {
+		ports = prependUniquePort(ports, requestedPort)
 	}
-	var (
-		last         error
-		h265Fallback *fragrtsp.ProbeResult
-	)
-	for _, candidate := range fragrtsp.CommonCandidates(host) {
-		if err := ctx.Err(); err != nil {
-			if errors.Is(err, context.DeadlineExceeded) && h265Fallback != nil {
-				base.RTSPURL = h265Fallback.URL
-				base.Codec = h265Fallback.Codec
-				return DetectionResult{Camera: base, Method: "rtsp-auto"}, nil
+	probe, report, searchErr := fragrtsp.Search(ctx, base.Host, base.Username, base.Password, fragrtsp.SearchOptions{
+		Ports:          ports,
+		ConnectTimeout: cfg.RTSPConnectTimeout,
+		ProbeTimeout:   cfg.RTSPCandidateTimeout,
+		MaxCandidates:  cfg.RTSPMaxCandidates,
+		DictionaryPath: cfg.RTSPDictionaryPath,
+		Parallelism:    4,
+	})
+	if searchErr == nil {
+		base.RTSPURL = probe.URL
+		base.Codec = probe.Codec
+		return DetectionResult{Camera: base, Method: "rtsp-dictionary", Diagnostics: &report}, nil
+	}
+	if onvifErr != nil {
+		return DetectionResult{}, fmt.Errorf("detección automática fallida: %w; ONVIF: %v", searchErr, onvifErr)
+	}
+	return DetectionResult{}, searchErr
+}
+
+func ProbeManual(ctx context.Context, cfg config.Config, request ProbeRequest) (ProbeResponse, error) {
+	base, rawURL, _, err := prepareCamera(cfg, AddRequest{
+		Host: request.Host, Username: request.Username, Password: request.Password, RTSPURL: request.RTSPURL,
+	})
+	if err != nil {
+		return ProbeResponse{}, err
+	}
+	if rawURL == "" {
+		return ProbeResponse{}, errors.New("introduzca una URL RTSP para probar")
+	}
+	return probeManual(ctx, cfg, base, rawURL)
+}
+
+func probeManual(ctx context.Context, cfg config.Config, base model.Camera, rawURL string) (ProbeResponse, error) {
+	normalized := fragrtsp.NormalizeHost(rawURL, base.Host)
+	withAuth, err := fragrtsp.WithCredentials(normalized, base.Username, base.Password)
+	if err != nil {
+		return ProbeResponse{}, err
+	}
+	probe, err := fragrtsp.Probe(ctx, withAuth, cfg.ProbeTimeout)
+	if err != nil {
+		return ProbeResponse{}, fmt.Errorf("no se pudo abrir la URL RTSP: %w", err)
+	}
+	u, _ := url.Parse(probe.URL)
+	port := 554
+	if value, convErr := strconv.Atoi(u.Port()); convErr == nil && value > 0 {
+		port = value
+	}
+	return ProbeResponse{Host: base.Host, RTSPURL: probe.URL, Codec: probe.Codec, Port: port}, nil
+}
+
+func prepareCamera(cfg config.Config, request AddRequest) (model.Camera, string, int, error) {
+	hostInput := strings.TrimSpace(request.Host)
+	rawURL := strings.TrimSpace(request.RTSPURL)
+	requestedPort := 0
+
+	if rawURL != "" {
+		u, err := url.Parse(rawURL)
+		if err != nil || (u.Scheme != "rtsp" && u.Scheme != "rtsps") || u.Hostname() == "" {
+			return model.Camera{}, "", 0, errors.New("URL RTSP inválida")
+		}
+		if hostInput == "" {
+			hostInput = u.Hostname()
+		}
+		if port, convErr := strconv.Atoi(u.Port()); convErr == nil {
+			requestedPort = port
+		}
+	}
+
+	host, hostPort, err := normalizeHostInput(hostInput)
+	if err != nil {
+		return model.Camera{}, "", 0, err
+	}
+	if requestedPort == 0 {
+		requestedPort = hostPort
+	}
+	if err := cfg.ValidateCameraIP(host); err != nil {
+		return model.Camera{}, "", 0, err
+	}
+
+	username := strings.TrimSpace(request.Username)
+	password := request.Password
+	if rawURL != "" {
+		urlUser, urlPassword, hasCredentials := fragrtsp.ExtractCredentials(rawURL)
+		if hasCredentials {
+			if username == "" {
+				username = urlUser
 			}
-			return DetectionResult{}, err
-		}
-		withAuth, err := fragrtsp.WithCredentials(candidate, base.Username, base.Password)
-		if err != nil {
-			continue
-		}
-		probe, err := fragrtsp.Probe(ctx, withAuth, candidateTimeout)
-		if err != nil {
-			last = err
-			continue
-		}
-		if strings.EqualFold(probe.Codec, "H264") {
-			base.RTSPURL = probe.URL
-			base.Codec = probe.Codec
-			return DetectionResult{Camera: base, Method: "rtsp-auto"}, nil
-		}
-		if h265Fallback == nil {
-			copy := probe
-			h265Fallback = &copy
+			if password == "" && (strings.TrimSpace(request.Username) == "" || username == urlUser) {
+				password = urlPassword
+			}
 		}
 	}
-	if h265Fallback != nil {
-		base.RTSPURL = h265Fallback.URL
-		base.Codec = h265Fallback.Codec
-		return DetectionResult{Camera: base, Method: "rtsp-auto"}, nil
+
+	base := model.Camera{
+		Name:     strings.TrimSpace(request.Name),
+		Host:     host,
+		Username: username,
+		Password: password,
+		Enabled:  boolValue(request.Enabled, true),
+		Record:   boolValue(request.Record, true),
+		Upload:   boolValue(request.Upload, cfg.SFTP.Enabled),
 	}
-	if last == nil {
-		last = onvifErr
+	if base.Name == "" {
+		base.Name = "Cámara " + host
 	}
-	return DetectionResult{}, fmt.Errorf("no se encontró un stream ONVIF/RTSP en %s: %w", host, last)
+	return base, rawURL, requestedPort, nil
+}
+
+func normalizeHostInput(raw string) (string, int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", 0, errors.New("introduzca la IP de la cámara o una URL RTSP")
+	}
+	if ip := net.ParseIP(strings.Trim(raw, "[]")); ip != nil {
+		return strings.Trim(raw, "[]"), 0, nil
+	}
+	host, portRaw, err := net.SplitHostPort(raw)
+	if err != nil {
+		return "", 0, errors.New("la cámara debe indicarse mediante una dirección IP; el puerto es opcional")
+	}
+	if net.ParseIP(strings.Trim(host, "[]")) == nil {
+		return "", 0, errors.New("la cámara debe indicarse mediante una dirección IP")
+	}
+	port, err := strconv.Atoi(portRaw)
+	if err != nil || port < 1 || port > 65535 {
+		return "", 0, errors.New("puerto de cámara inválido")
+	}
+	return strings.Trim(host, "[]"), port, nil
+}
+
+func prependUniquePort(ports []int, port int) []int {
+	out := []int{port}
+	for _, existing := range ports {
+		if existing != port {
+			out = append(out, existing)
+		}
+	}
+	return out
 }
 
 func boolValue(value *bool, fallback bool) bool {

@@ -50,6 +50,7 @@ func New(cfg config.Config, authManager *auth.Manager, cameras *camera.Manager, 
 	protected.HandleFunc("POST /api/logout", s.logout)
 	protected.HandleFunc("GET /api/cameras", s.listCameras)
 	protected.HandleFunc("POST /api/cameras", s.addCamera)
+	protected.HandleFunc("POST /api/rtsp/probe", s.probeRTSP)
 	protected.HandleFunc("DELETE /api/cameras/{id}", s.deleteCamera)
 	protected.HandleFunc("POST /api/discovery", s.discovery)
 	protected.HandleFunc("GET /api/status", s.status)
@@ -66,7 +67,7 @@ func New(cfg config.Config, authManager *auth.Manager, cameras *camera.Manager, 
 
 	s.http = &http.Server{
 		Addr: cfg.ListenAddress, Handler: securityHeaders(mux),
-		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 90 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 180 * time.Second, WriteTimeout: 180 * time.Second, IdleTimeout: 90 * time.Second,
 	}
 	return s, nil
 }
@@ -160,7 +161,7 @@ func (s *Server) addCamera(w http.ResponseWriter, r *http.Request) {
 	if err := decodeJSON(w, r, &request); err != nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 150*time.Second)
 	defer cancel()
 	detected, err := camera.Detect(ctx, s.cfg, request)
 	if err != nil {
@@ -172,7 +173,25 @@ func (s *Server) addCamera(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "no se pudo guardar la cámara")
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"camera": cam.Public(), "detection_method": detected.Method})
+	writeJSON(w, http.StatusCreated, map[string]any{"camera": cam.Public(), "detection_method": detected.Method, "diagnostics": detected.Diagnostics})
+}
+
+func (s *Server) probeRTSP(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCSRF(w, r) {
+		return
+	}
+	var request camera.ProbeRequest
+	if err := decodeJSON(w, r, &request); err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.ProbeTimeout+2*time.Second)
+	defer cancel()
+	probe, err := camera.ProbeManual(ctx, s.cfg, request)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, model.RedactSecrets(err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, probe)
 }
 
 func (s *Server) deleteCamera(w http.ResponseWriter, r *http.Request) {

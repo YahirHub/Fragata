@@ -27,3 +27,6 @@ Thumbs.db
 
 # Dependencias vendorizadas (solo si se generan localmente)
 vendor/
+
+# Diccionario RTSP local personalizado
+/config/rtsp-paths.txt

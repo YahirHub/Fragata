@@ -1,0 +1,10 @@
+# Diccionario RTSP local opcional de Fragata.
+# Formatos permitidos:
+#   /ruta
+#   puerto|/ruta
+#   Nombre descriptivo|puerto|/ruta
+#
+# Use * o 0 como puerto para probar la ruta en todos los puertos configurados.
+
+# Cámara OEM principal|*|/live/main
+# Cámara OEM secundaria|8554|/live/sub

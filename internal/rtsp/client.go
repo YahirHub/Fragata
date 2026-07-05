@@ -48,6 +48,16 @@ func WithoutCredentials(raw string) string {
 	return u.String()
 }
 
+func ExtractCredentials(raw string) (username, password string, ok bool) {
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return "", "", false
+	}
+	username = u.User.Username()
+	password, _ = u.User.Password()
+	return username, password, true
+}
+
 func NormalizeHost(raw, host string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -70,12 +80,12 @@ func Probe(ctx context.Context, rawURL string, timeout time.Duration) (ProbeResu
 	if err != nil {
 		return ProbeResult{}, fmt.Errorf("URL RTSP inválida: %w", err)
 	}
+	protocol := gortsplib.ProtocolTCP
 	c := &gortsplib.Client{
-		Scheme: u.Scheme, Host: u.Host, ReadTimeout: timeout, WriteTimeout: timeout,
-		InitialUDPReadTimeout: time.Second,
+		Scheme: u.Scheme, Host: u.Host, Protocol: &protocol, ReadTimeout: timeout, WriteTimeout: timeout,
 	}
 	if err := c.Start(); err != nil {
-		return ProbeResult{}, err
+		return ProbeResult{}, fmt.Errorf("conectar TCP RTSP a %s: %w", u.Host, err)
 	}
 	defer c.Close()
 
@@ -91,7 +101,7 @@ func Probe(ctx context.Context, rawURL string, timeout time.Duration) (ProbeResu
 
 	desc, _, err := c.Describe(u)
 	if err != nil {
-		return ProbeResult{}, err
+		return ProbeResult{}, fmt.Errorf("DESCRIBE RTSP: %w", err)
 	}
 
 	var (
@@ -147,20 +157,12 @@ func Probe(ctx context.Context, rawURL string, timeout time.Duration) (ProbeResu
 }
 
 func CommonCandidates(host string) []string {
-	h := net.JoinHostPort(strings.Trim(host, "[]"), "554")
-	return []string{
-		"rtsp://" + h + "/cam/realmonitor?channel=1&subtype=0",
-		"rtsp://" + h + "/cam/realmonitor?channel=1&subtype=1",
-		"rtsp://" + h + "/live/ch00_0",
-		"rtsp://" + h + "/live/ch00_1",
-		"rtsp://" + h + "/Streaming/Channels/101",
-		"rtsp://" + h + "/Streaming/Channels/102",
-		"rtsp://" + h + "/h264Preview_01_main",
-		"rtsp://" + h + "/h264Preview_01_sub",
-		"rtsp://" + h + "/stream1",
-		"rtsp://" + h + "/stream2",
-		"rtsp://" + h + "/live",
+	candidates := ExpandCandidates(host, []int{554}, nil, 96)
+	out := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		out = append(out, candidate.URL)
 	}
+	return out
 }
 
 type Source struct {
@@ -176,9 +178,9 @@ func (s *Source) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("URL RTSP inválida: %w", err)
 	}
+	protocol := gortsplib.ProtocolTCP
 	c := &gortsplib.Client{
-		Scheme: u.Scheme, Host: u.Host, ReadTimeout: 15 * time.Second, WriteTimeout: 10 * time.Second,
-		InitialUDPReadTimeout: 2 * time.Second,
+		Scheme: u.Scheme, Host: u.Host, Protocol: &protocol, ReadTimeout: 15 * time.Second, WriteTimeout: 10 * time.Second,
 	}
 	if err := c.Start(); err != nil {
 		return fmt.Errorf("conectar RTSP: %w", err)

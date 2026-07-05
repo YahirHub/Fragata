@@ -11,7 +11,10 @@ Incluido:
 - Descubrimiento ONVIF por WS-Discovery.
 - Alta manual indicando únicamente IP, usuario y contraseña.
 - Consulta ONVIF de información, perfiles y URL de transmisión.
-- Fallback a rutas RTSP habituales de Imou/Dahua, Hikvision, Reolink y cámaras genéricas.
+- Fallback mediante diccionario RTSP integrado para Imou/Dahua, Hikvision, Reolink, Uniview, Axis, Vivotek, Hanwha y firmware genérico.
+- Sondeo previo de puertos RTSP para no repetir timeouts por cada ruta.
+- Diccionario local extensible sin descargar datos durante la ejecución.
+- Prueba independiente de una URL RTSP manual antes de guardarla.
 - Validación real del stream antes de guardar la cámara.
 - Recepción RTSP H.264 y H.265 sin transcodificación.
 - Grabación MKV segmentada y cierre atómico desde `.mkv.partial`.
@@ -91,12 +94,15 @@ Fragata intenta, en orden:
 
 1. Servicios ONVIF habituales.
 2. Información y perfiles ONVIF.
-3. URL RTSP entregada por la cámara.
-4. Rutas RTSP comunes si ONVIF no está disponible.
-5. Apertura real del stream para confirmar H.264 o H.265.
-6. Preferencia por un perfil H.264 para conservar la vista web; H.265 se usa como fallback.
+3. `GetStreamUri` para obtener la dirección oficial entregada por la cámara.
+4. Comprobación TCP de los puertos configurados en `FRAGATA_RTSP_PORTS`.
+5. Diccionario RTSP integrado solamente sobre los puertos que respondieron.
+6. Apertura real mediante RTSP sobre TCP para confirmar recepción de video H.264 o H.265.
+7. Preferencia por H.264 para conservar la vista web; H.265 queda como fallback para grabación.
 
-Para cámaras Imou/Dahua, entre las rutas probadas se encuentran:
+La detección no prueba contraseñas por fuerza bruta: usa únicamente las credenciales introducidas por el usuario. Tampoco existe una ruta RTSP universal para todas las marcas; ONVIF es la primera opción y el diccionario es un fallback acotado.
+
+Para cámaras Imou/Dahua, entre las primeras rutas probadas se encuentran:
 
 ```text
 /cam/realmonitor?channel=1&subtype=0
@@ -105,11 +111,51 @@ Para cámaras Imou/Dahua, entre las rutas probadas se encuentran:
 
 ### URL RTSP manual
 
-También puedes proporcionar una URL explícita. No incluyas las credenciales dentro de la URL; usa los campos de usuario y contraseña para evitar que aparezcan accidentalmente en logs o respuestas.
+El panel permite pegar una URL explícita, pulsar **Probar URL** y guardarla únicamente cuando Fragata confirma que recibe video H.264 o H.265.
 
 ```text
-rtsp://192.168.1.100:554/cam/realmonitor?channel=1&subtype=0
+rtsp://192.168.10.50:554/cam/realmonitor?channel=1&subtype=0
 ```
+
+Es preferible escribir usuario y contraseña en sus campos separados. Fragata también acepta una URL completa como esta y extrae las credenciales para guardarlas cifradas, eliminándolas de la URL persistida:
+
+```text
+rtsp://usuario:contraseña@192.168.10.50:554/cam/realmonitor?channel=1&subtype=0
+```
+
+### Diccionario RTSP local
+
+Fragata incluye rutas comunes dentro del binario y permite anteponer rutas propias mediante un archivo local. No descarga bases de datos ni listas durante la ejecución.
+
+```bash
+cp config/rtsp-paths.example.txt config/rtsp-paths.txt
+```
+
+Configura:
+
+```dotenv
+FRAGATA_RTSP_DICTIONARY=./config/rtsp-paths.txt
+```
+
+Formatos admitidos:
+
+```text
+/ruta
+8554|/ruta
+Nombre de cámara|554|/ruta
+```
+
+`*` o `0` indican que la ruta debe probarse en todos los puertos configurados.
+
+### Diagnóstico de timeouts
+
+Un error como:
+
+```text
+dial tcp 192.168.10.50:554: i/o timeout
+```
+
+ocurre antes de comprobar la ruta: el servidor donde se ejecuta Fragata no pudo abrir el puerto 554. En ese caso revisa que RTSP esté habilitado en la cámara, que la IP sea correcta y que Docker, firewall, VLAN o rutas del host permitan alcanzar esa subred. El diccionario solo puede ayudar cuando algún puerto RTSP responde.
 
 ## Grabaciones MKV
 
@@ -237,7 +283,8 @@ journalctl -u fragata -f
 | `POST` | `/api/logout` | Cerrar sesión |
 | `GET` | `/api/session` | Estado de sesión y CSRF |
 | `GET` | `/api/cameras` | Listar cámaras sin secretos |
-| `POST` | `/api/cameras` | Detectar y agregar cámara |
+| `POST` | `/api/cameras` | Detectar, validar y agregar cámara |
+| `POST` | `/api/rtsp/probe` | Probar una URL RTSP sin guardarla |
 | `DELETE` | `/api/cameras/{id}` | Eliminar configuración |
 | `POST` | `/api/discovery` | WS-Discovery ONVIF |
 | `GET` | `/api/status` | Estado de streams y grabación |
@@ -249,6 +296,7 @@ Las operaciones mutables requieren el encabezado `X-Fragata-CSRF` cuando el logi
 ## Seguridad y límites
 
 - De forma predeterminada solo se aceptan IP privadas/locales para cámaras; los hosts devueltos por ONVIF se fijan a la IP introducida para reducir SSRF.
+- La búsqueda RTSP está limitada por puertos, número de candidatos, tiempo y paralelismo; no realiza fuerza bruta de credenciales.
 - Las contraseñas de las cámaras no se devuelven por API y se cifran en disco.
 - La llave maestra se crea en `data/secret.key` con permisos `0600` si no se proporciona mediante entorno.
 - No se usa `InsecureIgnoreHostKey` para SFTP.
@@ -295,7 +343,7 @@ internal/live/        puente RTP a WebRTC
 internal/matroska/    escritor MKV sin CGO
 internal/onvif/       WS-Discovery y SOAP ONVIF
 internal/recording/   segmentación y recuperación
-internal/rtsp/        conexión RTSP y despaquetado RTP
+internal/rtsp/        conexión RTSP, sondeo de puertos y diccionario de rutas
 internal/store/       estado JSON atómico y secretos cifrados
 internal/stream/      distribución interna de RTP y access units
 internal/upload/      cola y transferencia SFTP
