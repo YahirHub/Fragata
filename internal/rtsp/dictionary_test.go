@@ -52,3 +52,52 @@ func TestExtractCredentials(t *testing.T) {
 		t.Fatalf("got user=%q password=%q ok=%v", user, password, ok)
 	}
 }
+
+func TestPortFailureSummaryTimeout(t *testing.T) {
+	message := PortFailureSummary("192.168.10.234", []PortCheck{
+		{Port: 554, State: "timeout"},
+		{Port: 80, State: "timeout"},
+	})
+	if message == "" {
+		t.Fatal("expected timeout explanation")
+	}
+}
+
+func TestPortFailureSummaryRefused(t *testing.T) {
+	message := PortFailureSummary("192.168.10.234", []PortCheck{{Port: 554, State: "refused"}})
+	if message == "" {
+		t.Fatal("expected refused explanation")
+	}
+}
+
+func TestBetterDictionaryProbePrefersHigherResolutionEvenWhenH265(t *testing.T) {
+	current := &dictionaryProbe{
+		probe:     ProbeResult{URL: "rtsp://camera/sub", Codec: "H264", Width: 640, Height: 480},
+		candidate: Candidate{Name: "Secundario", URL: "rtsp://camera/sub"},
+		index:     1,
+	}
+	candidate := &dictionaryProbe{
+		probe:     ProbeResult{URL: "rtsp://camera/main", Codec: "H265", Width: 2304, Height: 1296},
+		candidate: Candidate{Name: "Principal", URL: "rtsp://camera/main"},
+		index:     2,
+	}
+	if !betterDictionaryProbe(candidate, current) {
+		t.Fatal("el stream H.265 de mayor resolución debe ganar")
+	}
+}
+
+func TestBetterDictionaryProbeUsesMainRouteWhenDimensionsUnknown(t *testing.T) {
+	secondary := &dictionaryProbe{
+		probe:     ProbeResult{URL: "rtsp://camera/cam/realmonitor?channel=1&subtype=1", Codec: "H264"},
+		candidate: Candidate{Name: "Dahua/Imou secundario", URL: "rtsp://camera/cam/realmonitor?channel=1&subtype=1"},
+		index:     1,
+	}
+	main := &dictionaryProbe{
+		probe:     ProbeResult{URL: "rtsp://camera/cam/realmonitor?channel=1&subtype=0", Codec: "H265"},
+		candidate: Candidate{Name: "Dahua/Imou principal", URL: "rtsp://camera/cam/realmonitor?channel=1&subtype=0"},
+		index:     2,
+	}
+	if !betterDictionaryProbe(main, secondary) {
+		t.Fatal("la ruta principal debe ganar cuando no hay dimensiones")
+	}
+}

@@ -1,10 +1,13 @@
+# Alternativa para entornos donde network_mode: host no está disponible.
+# La alta manual por IP puede funcionar, pero WS-Discovery ONVIF multicast
+# normalmente no atravesará la red bridge y el firewall FORWARD del host debe
+# permitir el acceso hacia la subred de cámaras.
 services:
   fragata:
     build:
       context: .
     container_name: fragata
     restart: unless-stopped
-    network_mode: host
     env_file:
       - .env
     environment:
@@ -12,10 +15,10 @@ services:
       FRAGATA_DATA_DIR: /data
       FRAGATA_RECORDINGS_DIR: /data/recordings
       TZ: America/Mexico_City
+    ports:
+      - "8080:8080"
     volumes:
       - fragata_data:/data
-      # Descomenta si usas una llave privada fuera del volumen de datos.
-      # - ./secrets/id_ed25519:/run/secrets/id_ed25519:ro
     healthcheck:
       test: ["CMD", "/fragata", "-healthcheck", "http://127.0.0.1:8080/healthz"]
       interval: 30s

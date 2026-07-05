@@ -26,3 +26,14 @@ func TestUploadJobPublicOmitsLocalSecrets(t *testing.T) {
 		t.Fatalf("credentials leaked: %q", public.LastError)
 	}
 }
+
+func TestCameraPublicRedactsBothStreams(t *testing.T) {
+	camera := Camera{
+		RTSPURL:     "rtsp://admin:main-secret@192.168.1.10/main",
+		LiveRTSPURL: "rtsp://admin:live-secret@192.168.1.10/sub",
+	}
+	public := camera.Public()
+	if strings.Contains(public.RTSPURL, "main-secret") || strings.Contains(public.LiveRTSPURL, "live-secret") {
+		t.Fatalf("camera credentials leaked: %#v", public)
+	}
+}

@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +21,7 @@ import (
 	"fragata/internal/config"
 	"fragata/internal/live"
 	"fragata/internal/model"
+	"fragata/internal/networkdiag"
 	"fragata/internal/onvif"
 	"fragata/internal/store"
 )
@@ -46,11 +49,16 @@ func New(cfg config.Config, authManager *auth.Manager, cameras *camera.Manager, 
 
 	protected := http.NewServeMux()
 	protected.HandleFunc("GET /", s.index)
+	protected.HandleFunc("GET /camera/{id}", s.cameraPage)
 	protected.HandleFunc("GET /api/session", s.session)
 	protected.HandleFunc("POST /api/logout", s.logout)
 	protected.HandleFunc("GET /api/cameras", s.listCameras)
+	protected.HandleFunc("GET /api/cameras/{id}", s.getCamera)
 	protected.HandleFunc("POST /api/cameras", s.addCamera)
+	protected.HandleFunc("PATCH /api/cameras/{id}", s.updateCamera)
+	protected.HandleFunc("POST /api/cameras/{id}/redetect", s.redetectCamera)
 	protected.HandleFunc("POST /api/rtsp/probe", s.probeRTSP)
+	protected.HandleFunc("POST /api/network/diagnose", s.diagnoseNetwork)
 	protected.HandleFunc("DELETE /api/cameras/{id}", s.deleteCamera)
 	protected.HandleFunc("POST /api/discovery", s.discovery)
 	protected.HandleFunc("GET /api/status", s.status)
@@ -103,6 +111,15 @@ func (s *Server) index(w http.ResponseWriter, _ *http.Request) {
 	s.serveAsset(w, "index.html", "text/html; charset=utf-8")
 }
 
+func (s *Server) cameraPage(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if _, ok := s.cameras.Camera(id); !ok {
+		http.NotFound(w, r)
+		return
+	}
+	s.serveAsset(w, "viewer.html", "text/html; charset=utf-8")
+}
+
 func (s *Server) serveAsset(w http.ResponseWriter, name, contentType string) {
 	data, err := staticFiles.ReadFile("static/" + name)
 	if err != nil {
@@ -146,11 +163,22 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) {
 	sess, _ := s.auth.Session(r)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"auth_enabled": s.auth.Enabled(), "csrf_token": sess.CSRFToken, "username": s.cfg.AdminUser,
+		"ffmpeg_available": s.cfg.FFmpegPath != "",
 	})
 }
 
 func (s *Server) listCameras(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.cameras.Cameras())
+}
+
+func (s *Server) getCamera(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	cam, ok := s.cameras.Camera(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "cámara no encontrada")
+		return
+	}
+	writeJSON(w, http.StatusOK, cam.Public())
 }
 
 func (s *Server) addCamera(w http.ResponseWriter, r *http.Request) {
@@ -176,6 +204,54 @@ func (s *Server) addCamera(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"camera": cam.Public(), "detection_method": detected.Method, "diagnostics": detected.Diagnostics})
 }
 
+func (s *Server) updateCamera(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCSRF(w, r) {
+		return
+	}
+	var request struct {
+		Record *bool `json:"record"`
+	}
+	if err := decodeJSON(w, r, &request); err != nil {
+		return
+	}
+	if request.Record == nil {
+		writeError(w, http.StatusBadRequest, "indique el estado de grabación")
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	cam, err := s.cameras.UpdateRecording(id, *request.Record)
+	if err != nil {
+		if strings.Contains(err.Error(), "no encontrada") {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "no se pudo actualizar la cámara")
+		return
+	}
+	writeJSON(w, http.StatusOK, cam.Public())
+}
+
+func (s *Server) redetectCamera(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCSRF(w, r) {
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	ctx, cancel := context.WithTimeout(r.Context(), 150*time.Second)
+	defer cancel()
+	detected, err := s.cameras.Redetect(ctx, id)
+	if err != nil {
+		if strings.Contains(err.Error(), "no encontrada") {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusUnprocessableEntity, model.RedactSecrets(err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"camera": detected.Camera.Public(), "detection_method": detected.Method, "diagnostics": detected.Diagnostics,
+	})
+}
+
 func (s *Server) probeRTSP(w http.ResponseWriter, r *http.Request) {
 	if !s.requireCSRF(w, r) {
 		return
@@ -192,6 +268,82 @@ func (s *Server) probeRTSP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, probe)
+}
+
+func (s *Server) diagnoseNetwork(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCSRF(w, r) {
+		return
+	}
+	var request struct {
+		Host  string `json:"host"`
+		Ports []int  `json:"ports,omitempty"`
+	}
+	if err := decodeJSON(w, r, &request); err != nil {
+		return
+	}
+	host, requestedPort, err := normalizeDiagnosticHost(request.Host)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.cfg.ValidateCameraIP(host); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ports := append([]int(nil), request.Ports...)
+	if len(ports) == 0 {
+		ports = append(ports, s.cfg.RTSPPorts...)
+		ports = append(ports, 443, 8899, 8000)
+	}
+	if requestedPort > 0 {
+		ports = append([]int{requestedPort}, ports...)
+	}
+	if len(ports) > 32 {
+		writeError(w, http.StatusBadRequest, "el diagnóstico permite como máximo 32 puertos")
+		return
+	}
+	for _, port := range ports {
+		if port < 1 || port > 65535 {
+			writeError(w, http.StatusBadRequest, "puerto de diagnóstico inválido")
+			return
+		}
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.RTSPConnectTimeout+2*time.Second)
+	defer cancel()
+	writeJSON(w, http.StatusOK, networkdiag.Diagnose(ctx, host, ports, s.cfg.RTSPConnectTimeout))
+}
+
+func normalizeDiagnosticHost(raw string) (string, int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", 0, errors.New("introduzca la IP o URL RTSP de la cámara")
+	}
+	if strings.HasPrefix(strings.ToLower(raw), "rtsp://") || strings.HasPrefix(strings.ToLower(raw), "rtsps://") {
+		parsed, err := url.Parse(raw)
+		if err != nil || parsed.Hostname() == "" {
+			return "", 0, errors.New("URL RTSP inválida")
+		}
+		port := 0
+		if parsed.Port() != "" {
+			port, err = strconv.Atoi(parsed.Port())
+			if err != nil || port < 1 || port > 65535 {
+				return "", 0, errors.New("puerto RTSP inválido")
+			}
+		}
+		return parsed.Hostname(), port, nil
+	}
+	if ip := net.ParseIP(strings.Trim(raw, "[]")); ip != nil {
+		return strings.Trim(raw, "[]"), 0, nil
+	}
+	host, portRaw, err := net.SplitHostPort(raw)
+	if err != nil || net.ParseIP(strings.Trim(host, "[]")) == nil {
+		return "", 0, errors.New("la cámara debe indicarse mediante una dirección IP")
+	}
+	port, err := strconv.Atoi(portRaw)
+	if err != nil || port < 1 || port > 65535 {
+		return "", 0, errors.New("puerto de cámara inválido")
+	}
+	return strings.Trim(host, "[]"), port, nil
 }
 
 func (s *Server) deleteCamera(w http.ResponseWriter, r *http.Request) {
@@ -241,25 +393,25 @@ func (s *Server) offer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strings.TrimSpace(r.PathValue("id"))
-	hub, ok := s.cameras.Hub(id)
-	if !ok {
-		writeError(w, http.StatusNotFound, "cámara no encontrada o deshabilitada")
-		return
-	}
 	var request struct {
 		SDP string `json:"sdp"`
 	}
 	if err := decodeJSON(w, r, &request); err != nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
 	defer cancel()
+	hub, mode, err := s.cameras.LiveHub(ctx, id)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, model.RedactSecrets(err.Error()))
+		return
+	}
 	answer, err := s.live.Offer(ctx, hub, request.SDP)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, model.RedactSecrets(err.Error()))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"sdp": answer})
+	writeJSON(w, http.StatusOK, map[string]string{"sdp": answer, "mode": mode})
 }
 
 func (s *Server) requireCSRF(w http.ResponseWriter, r *http.Request) bool {

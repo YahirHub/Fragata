@@ -48,7 +48,9 @@ func NewClient(timeout time.Duration, user, pass string, insecureTLS bool) *Clie
 func (c *Client) Inspect(ctx context.Context, host string) (Inspection, error) {
 	services := deviceServiceCandidates(host)
 	var last error
+	attempted := make([]string, 0, len(services))
 	for _, service := range services {
+		attempted = append(attempted, service)
 		ins, err := c.inspectService(ctx, service)
 		if err == nil {
 			return ins, nil
@@ -58,7 +60,7 @@ func (c *Client) Inspect(ctx context.Context, host string) (Inspection, error) {
 	if last == nil {
 		last = errors.New("sin servicios ONVIF candidatos")
 	}
-	return Inspection{}, last
+	return Inspection{}, fmt.Errorf("ningún endpoint ONVIF respondió (%s); último error: %w", strings.Join(attempted, ", "), last)
 }
 
 func (c *Client) inspectService(ctx context.Context, deviceService string) (Inspection, error) {
@@ -101,7 +103,6 @@ func deviceServiceCandidates(host string) []string {
 	}
 	return []string{
 		"http://" + defaultHost + "/onvif/device_service",
-		"http://" + net.JoinHostPort(host, "80") + "/onvif/device_service",
 		"http://" + net.JoinHostPort(host, "8899") + "/onvif/device_service",
 		"http://" + net.JoinHostPort(host, "8000") + "/onvif/device_service",
 	}

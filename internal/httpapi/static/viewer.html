@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Cámara · Fragata</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body class="viewer-body">
+  <header class="topbar">
+    <div class="topbar-title"><a class="back-link" href="/">← Cámaras</a><span class="brand-mark">F</span><strong>Fragata</strong></div>
+    <span id="viewerState" class="state">iniciando</span>
+  </header>
+  <main class="viewer-main">
+    <div class="viewer-heading">
+      <div><h1 id="cameraName">Cargando cámara…</h1><p id="cameraSubtitle"></p></div>
+      <div class="viewer-actions">
+        <button id="reconnectButton" class="secondary">Reconectar</button>
+        <button id="fullscreenButton" class="primary">Pantalla completa</button>
+      </div>
+    </div>
+    <section id="viewerStage" class="viewer-stage">
+      <video id="viewerVideo" autoplay muted playsinline></video>
+      <div id="viewerOverlay" class="viewer-overlay">Preparando vista en vivo…</div>
+    </section>
+    <section class="viewer-info">
+      <div><span>Stream principal</span><strong id="primaryInfo">—</strong></div>
+      <div><span>Modo de visualización</span><strong id="liveMode">—</strong></div>
+      <div><span>Estado de grabación</span><strong id="recordingState">—</strong></div>
+      <div class="viewer-record"><span><span>Grabar en MKV</span><strong>Activar o detener</strong></span><label class="switch"><input id="recordToggle" type="checkbox" aria-label="Activar grabación"><span class="switch-slider"></span></label></div>
+    </section>
+  </main>
+  <script src="/static/viewer.js" defer></script>
+</body>
+</html>

@@ -21,8 +21,10 @@ import (
 )
 
 type ProbeResult struct {
-	URL   string `json:"url"`
-	Codec string `json:"codec"`
+	URL    string `json:"url"`
+	Codec  string `json:"codec"`
+	Width  int    `json:"width,omitempty"`
+	Height int    `json:"height,omitempty"`
 }
 
 func WithCredentials(raw, username, password string) (string, error) {
@@ -105,17 +107,23 @@ func Probe(ctx context.Context, rawURL string, timeout time.Duration) (ProbeResu
 	}
 
 	var (
-		media *description.Media
-		forma any
-		codec string
+		media  *description.Media
+		forma  any
+		codec  string
+		width  int
+		height int
 	)
 	var h264 *format.H264
 	if found := desc.FindFormat(&h264); found != nil {
 		media, forma, codec = found, h264, "H264"
+		sps, _ := h264.SafeParams()
+		width, height, _ = videoDimensions(codec, sps)
 	} else {
 		var h265 *format.H265
 		if found := desc.FindFormat(&h265); found != nil {
 			media, forma, codec = found, h265, "H265"
+			_, sps, _ := h265.SafeParams()
+			width, height, _ = videoDimensions(codec, sps)
 		}
 	}
 	if media == nil {
@@ -152,7 +160,7 @@ func Probe(ctx context.Context, rawURL string, timeout time.Duration) (ProbeResu
 	case <-timer.C:
 		return ProbeResult{}, errors.New("el stream RTSP respondió pero no entregó video")
 	case <-packets:
-		return ProbeResult{URL: WithoutCredentials(rawURL), Codec: codec}, nil
+		return ProbeResult{URL: WithoutCredentials(rawURL), Codec: codec, Width: width, Height: height}, nil
 	}
 }
 
@@ -212,7 +220,8 @@ func (s *Source) runH264(ctx context.Context, c *gortsplib.Client, baseURL *base
 		return fmt.Errorf("SETUP RTSP: %w", err)
 	}
 	sps, pps := forma.SafeParams()
-	s.Hub.SetInfo(stream.Info{Codec: "H264", Width: positive(s.Width, 1920), Height: positive(s.Height, 1080), SPS: sps, PPS: pps})
+	width, height := sourceDimensions("H264", s.Width, s.Height, sps)
+	s.Hub.SetInfo(stream.Info{Codec: "H264", Width: width, Height: height, SPS: sps, PPS: pps})
 
 	c.OnPacketRTP(media, forma, func(pkt *rtp.Packet) {
 		if s.OnPacket != nil {
@@ -252,7 +261,8 @@ func (s *Source) runH264(ctx context.Context, c *gortsplib.Client, baseURL *base
 			}
 		}
 		if paramsChanged {
-			s.Hub.SetInfo(stream.Info{Codec: "H264", Width: positive(s.Width, 1920), Height: positive(s.Height, 1080), SPS: sps, PPS: pps})
+			width, height = sourceDimensions("H264", s.Width, s.Height, sps)
+			s.Hub.SetInfo(stream.Info{Codec: "H264", Width: width, Height: height, SPS: sps, PPS: pps})
 		}
 		s.Hub.PublishAccessUnit(stream.AccessUnit{PTS: rtpTimestampDuration(pts, forma.ClockRate()), NALUs: au, KeyFrame: key})
 	})
@@ -268,7 +278,8 @@ func (s *Source) runH265(ctx context.Context, c *gortsplib.Client, baseURL *base
 		return fmt.Errorf("SETUP RTSP: %w", err)
 	}
 	vps, sps, pps := forma.SafeParams()
-	s.Hub.SetInfo(stream.Info{Codec: "H265", Width: positive(s.Width, 1920), Height: positive(s.Height, 1080), VPS: vps, SPS: sps, PPS: pps})
+	width, height := sourceDimensions("H265", s.Width, s.Height, sps)
+	s.Hub.SetInfo(stream.Info{Codec: "H265", Width: width, Height: height, VPS: vps, SPS: sps, PPS: pps})
 
 	c.OnPacketRTP(media, forma, func(pkt *rtp.Packet) {
 		if s.OnPacket != nil {
@@ -314,7 +325,8 @@ func (s *Source) runH265(ctx context.Context, c *gortsplib.Client, baseURL *base
 			}
 		}
 		if paramsChanged {
-			s.Hub.SetInfo(stream.Info{Codec: "H265", Width: positive(s.Width, 1920), Height: positive(s.Height, 1080), VPS: vps, SPS: sps, PPS: pps})
+			width, height = sourceDimensions("H265", s.Width, s.Height, sps)
+			s.Hub.SetInfo(stream.Info{Codec: "H265", Width: width, Height: height, VPS: vps, SPS: sps, PPS: pps})
 		}
 		s.Hub.PublishAccessUnit(stream.AccessUnit{PTS: rtpTimestampDuration(pts, forma.ClockRate()), NALUs: au, KeyFrame: key})
 	})
@@ -341,11 +353,15 @@ func playUntilDone(ctx context.Context, c *gortsplib.Client) error {
 	return err
 }
 
-func positive(v, fallback int) int {
-	if v > 0 {
-		return v
+func sourceDimensions(codec string, configuredWidth, configuredHeight int, sps []byte) (int, int) {
+	if configuredWidth > 0 && configuredHeight > 0 {
+		return configuredWidth, configuredHeight
 	}
-	return fallback
+	width, height, err := videoDimensions(codec, sps)
+	if err == nil {
+		return width, height
+	}
+	return 0, 0
 }
 
 func rtpTimestampDuration(value int64, clockRate int) time.Duration {

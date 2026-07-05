@@ -51,6 +51,11 @@ func main() {
 		logger.Error("recordings directory error", "error", err)
 		os.Exit(1)
 	}
+	if cfg.FFmpegPath != "" {
+		logger.Info("FFmpeg detected for H265 live view", "path", cfg.FFmpegPath)
+	} else {
+		logger.Info("FFmpeg not detected; H265 live view will use an H264 substream when available")
+	}
 	if recovered, err := recording.RecoverPartials(cfg.RecordingsDir); err != nil {
 		logger.Warn("partial recording recovery failed", "error", err)
 	} else if len(recovered) > 0 {

@@ -1,8 +1,8 @@
 # Fragata
 
-Fragata es un servidor de cámaras IP escrito en Go. Detecta dispositivos ONVIF, obtiene o prueba automáticamente la URL RTSP, guarda video H.264/H.265 en segmentos MKV, ofrece vista en vivo H.264 mediante WebRTC y puede subir grabaciones terminadas por SFTP.
+Fragata es un servidor de cámaras IP escrito en Go. Detecta dispositivos ONVIF, elige el stream RTSP de mayor resolución para grabarlo sin recomprimir, guarda H.264/H.265 en segmentos MKV, ofrece vista en vivo mediante WebRTC y puede subir grabaciones terminadas por SFTP.
 
-El objetivo del proyecto es mantener una instalación simple: un único binario, frontend embebido, `CGO_ENABLED=0` y sin depender de FFmpeg durante la ejecución.
+El núcleo sigue siendo un único binario compilable con `CGO_ENABLED=0` y frontend embebido. FFmpeg es totalmente opcional: cuando está disponible, Fragata lo usa como proceso externo únicamente para convertir una vista H.265 a H.264 compatible con el navegador. El archivo MKV conserva siempre el video original de la cámara.
 
 ## Estado del MVP
 
@@ -16,21 +16,26 @@ Incluido:
 - Diccionario local extensible sin descargar datos durante la ejecución.
 - Prueba independiente de una URL RTSP manual antes de guardarla.
 - Validación real del stream antes de guardar la cámara.
-- Recepción RTSP H.264 y H.265 sin transcodificación.
+- Selección del perfil de mayor resolución sin preferir H.264 sobre H.265.
+- Separación entre stream principal de grabación y stream de visualización.
+- Recepción RTSP H.264 y H.265 sin recomprimir la grabación.
+- Detección automática de FFmpeg en `PATH` para visualizar el stream H.265 principal manteniendo su resolución.
+- Fallback a un substream H.264 cuando FFmpeg no está disponible o no puede iniciar.
 - Grabación MKV segmentada y cierre atómico desde `.mkv.partial`.
 - Recuperación conservadora de parciales después de un apagado inesperado.
-- Vista en vivo WebRTC para perfiles H.264, con límite global configurable.
+- Vista en vivo WebRTC, página dedicada por cámara y botón de pantalla completa.
+- Grabación apagada al agregar una cámara y switch persistente para iniciarla o detenerla.
 - Cola SFTP persistente, reintentos con backoff, `known_hosts`, archivo temporal remoto y checksum SHA-256.
 - Login opcional definido en `.env`.
 - Sesiones persistentes, CSRF, cookies `HttpOnly` y límite básico de intentos de acceso.
 - Credenciales de cámaras cifradas con AES-256-GCM dentro del estado local.
 - Panel web embebido y API HTTP.
-- Docker, Compose, systemd y scripts de compilación estática.
+- Docker, Compose con red LAN del host, systemd y scripts de compilación estática.
+- Diagnóstico de puertos desde el mismo proceso que intenta abrir la cámara.
 
 No incluido todavía:
 
 - Audio dentro del MKV.
-- Transcodificación H.265 a H.264.
 - Entrada mediante protocolo SRT. Las cámaras ONVIF normalmente entregan la transmisión por RTSP; SRT se añadirá como transporte independiente.
 - Detección de personas, mascotas o movimiento.
 - Reproducción histórica y línea de tiempo desde el panel.
@@ -40,7 +45,7 @@ No incluido todavía:
 - Go 1.26.4 o compatible con la versión indicada en `go.mod`.
 - Acceso inicial a internet para ejecutar `go mod tidy` y generar `go.sum`.
 - Una cámara con RTSP H.264 o H.265.
-- Para vista web, un perfil H.264. H.265 puede grabarse, pero no se transcodifica para el navegador.
+- Para visualizar el stream H.265 principal manteniendo su resolución, una instalación de FFmpeg con el encoder `libx264`. Sin FFmpeg, Fragata intenta usar un substream H.264 de la cámara.
 - Acceso a la misma red local para WS-Discovery, salvo que se introduzca la IP manualmente.
 
 ## Inicio rápido
@@ -98,7 +103,8 @@ Fragata intenta, en orden:
 4. Comprobación TCP de los puertos configurados en `FRAGATA_RTSP_PORTS`.
 5. Diccionario RTSP integrado solamente sobre los puertos que respondieron.
 6. Apertura real mediante RTSP sobre TCP para confirmar recepción de video H.264 o H.265.
-7. Preferencia por H.264 para conservar la vista web; H.265 queda como fallback para grabación.
+7. Comparación de todos los perfiles ONVIF válidos y selección del que tenga más píxeles, aunque sea H.265.
+8. Búsqueda separada de un perfil H.264 secundario como respaldo para el navegador.
 
 La detección no prueba contraseñas por fuerza bruta: usa únicamente las credenciales introducidas por el usuario. Tampoco existe una ruta RTSP universal para todas las marcas; ONVIF es la primera opción y el diccionario es un fallback acotado.
 
@@ -147,7 +153,9 @@ Nombre de cámara|554|/ruta
 
 `*` o `0` indican que la ruta debe probarse en todos los puertos configurados.
 
-### Diagnóstico de timeouts
+### Diagnóstico de red y timeouts
+
+El panel incluye **Diagnosticar red**. La comprobación se ejecuta dentro del mismo proceso y espacio de red de Fragata, por lo que permite detectar diferencias entre el host y un contenedor.
 
 Un error como:
 
@@ -155,7 +163,42 @@ Un error como:
 dial tcp 192.168.10.50:554: i/o timeout
 ```
 
-ocurre antes de comprobar la ruta: el servidor donde se ejecuta Fragata no pudo abrir el puerto 554. En ese caso revisa que RTSP esté habilitado en la cámara, que la IP sea correcta y que Docker, firewall, VLAN o rutas del host permitan alcanzar esa subred. El diccionario solo puede ayudar cuando algún puerto RTSP responde.
+ocurre antes de comprobar la ruta, el usuario o la contraseña. Significa que el entorno donde corre Fragata no completó la conexión TCP al puerto. El diagnóstico clasifica cada puerto como:
+
+- `abierto`: ya puede probarse RTSP.
+- `rechazado`: la IP responde, pero el servicio no escucha en ese puerto.
+- `sin respuesta`: firewall, aislamiento, IP incorrecta o problema de red.
+- `sin ruta` o `inalcanzable`: el servidor no tiene camino hacia la subred.
+
+El diccionario de rutas solo puede ayudar después de que un puerto responda. Una contraseña con caracteres como `!` tampoco causa un timeout de conexión; la autenticación ocurre después de abrir el socket.
+
+## Calidad principal y vista en vivo
+
+Fragata guarda dos decisiones independientes por cámara:
+
+```text
+Stream principal de mayor resolución -> grabación MKV sin recomprimir
+Stream de vista -> WebRTC directo, FFmpeg o substream H.264
+```
+
+La política de visualización es:
+
+1. Si el stream principal es H.264, se envía directamente al navegador.
+2. Si el principal es H.265 y Fragata detectó FFmpeg, toma ese stream de máxima resolución y lo recomprime a H.264 solo para WebRTC, conservando dimensiones y relación de aspecto.
+3. Si FFmpeg no existe o falla, se utiliza el mejor substream H.264 detectado.
+4. Si no existe ninguna opción compatible, la grabación H.265 continúa funcionando y el panel explica por qué no puede abrir la vista.
+
+Fragata busca automáticamente `ffmpeg` o `ffmpeg.exe` en `PATH`. También puede indicarse una ruta explícita:
+
+```dotenv
+FRAGATA_FFMPEG_PATH=/usr/bin/ffmpeg
+```
+
+El proceso FFmpeg se inicia bajo demanda al abrir una cámara H.265; no se utiliza para grabar ni remultiplexar los MKV. Se detiene automáticamente cuando no quedan espectadores durante `FRAGATA_LIVE_IDLE_TIMEOUT` (30 segundos por defecto).
+
+Cada cámara tiene una página dedicada en `/camera/<id>`, con reproducción automática, reconexión y pantalla completa. El video usa `object-fit: contain` para no deformar una imagen 16:9, 4:3 u otra relación de aspecto.
+
+Las cámaras ya guardadas antes de esta versión pueden conservar la URL antigua. Usa **Redetectar calidad** en la tarjeta para volver a consultar perfiles y sustituirla sin perder nombre, credenciales ni configuración de grabación.
 
 ## Grabaciones MKV
 
@@ -178,7 +221,7 @@ Al terminar:
 3. Se renombra atómicamente a `.mkv`.
 4. Se registra para SFTP, cuando corresponde.
 
-La rotación ocurre en un fotograma clave después de `FRAGATA_SEGMENT_DURATION`. El valor mínimo es 10 segundos.
+La rotación ocurre en un fotograma clave después de `FRAGATA_SEGMENT_DURATION`. El valor mínimo es 10 segundos. Una cámara nueva siempre se guarda con la grabación apagada: debe activarse después con el switch **Grabación** en el panel o en su página dedicada. Al cambiarlo, la preferencia queda persistida y el worker se reinicia limpiamente.
 
 ## SFTP
 
@@ -236,6 +279,8 @@ readelf -d dist/fragata-linux-amd64
 
 ## Docker Compose
 
+En servidores Linux, `docker-compose.yml` usa `network_mode: host`. Fragata comparte la red del host para alcanzar cámaras LAN y recibir WS-Discovery multicast. No se declara `ports:` porque el servicio escucha directamente en el puerto `8080` del host.
+
 ```bash
 cp .env.example .env
 docker compose build
@@ -243,7 +288,19 @@ docker compose up -d
 docker compose logs -f fragata
 ```
 
-El contenedor final usa `scratch`, ejecuta con UID/GID `65532` y persiste `/data` en un volumen.
+Después abre:
+
+```text
+http://IP_DEL_SERVIDOR:8080
+```
+
+Si el entorno no admite red del host, usa el archivo bridge:
+
+```bash
+docker compose -f docker-compose.bridge.yml up -d --build
+```
+
+Con bridge, el acceso manual por IP puede funcionar si el firewall permite forwarding, pero el descubrimiento multicast ONVIF puede no atravesar esa red. El contenedor final usa `scratch`, ejecuta con UID/GID `65532` y persiste `/data` en un volumen. La imagen `scratch` no contiene FFmpeg; allí Fragata utiliza WebRTC directo o el substream H.264. Para transcodificación H.265 debe ejecutarse el binario en un host que tenga FFmpeg o construirse una imagen derivada que lo incluya.
 
 ## Servicio systemd
 
@@ -283,8 +340,12 @@ journalctl -u fragata -f
 | `POST` | `/api/logout` | Cerrar sesión |
 | `GET` | `/api/session` | Estado de sesión y CSRF |
 | `GET` | `/api/cameras` | Listar cámaras sin secretos |
+| `GET` | `/api/cameras/{id}` | Consultar una cámara |
 | `POST` | `/api/cameras` | Detectar, validar y agregar cámara |
+| `PATCH` | `/api/cameras/{id}` | Activar o detener la grabación |
+| `POST` | `/api/cameras/{id}/redetect` | Volver a elegir stream principal y vista |
 | `POST` | `/api/rtsp/probe` | Probar una URL RTSP sin guardarla |
+| `POST` | `/api/network/diagnose` | Diagnosticar puertos y alcance de red hacia una cámara |
 | `DELETE` | `/api/cameras/{id}` | Eliminar configuración |
 | `POST` | `/api/discovery` | WS-Discovery ONVIF |
 | `GET` | `/api/status` | Estado de streams y grabación |
@@ -298,6 +359,7 @@ Las operaciones mutables requieren el encabezado `X-Fragata-CSRF` cuando el logi
 - De forma predeterminada solo se aceptan IP privadas/locales para cámaras; los hosts devueltos por ONVIF se fijan a la IP introducida para reducir SSRF.
 - La búsqueda RTSP está limitada por puertos, número de candidatos, tiempo y paralelismo; no realiza fuerza bruta de credenciales.
 - Las contraseñas de las cámaras no se devuelven por API y se cifran en disco.
+- Al usar FFmpeg externo, la URL RTSP con credenciales se entrega como argumento del proceso; ejecuta Fragata bajo un usuario dedicado y evita que otros usuarios del sistema puedan inspeccionar sus procesos.
 - La llave maestra se crea en `data/secret.key` con permisos `0600` si no se proporciona mediante entorno.
 - No se usa `InsecureIgnoreHostKey` para SFTP.
 - `insecure_tls` solo afecta una cámara ONVIF HTTPS concreta cuando se solicita desde la API.
@@ -305,6 +367,7 @@ Las operaciones mutables requieren el encabezado `X-Fragata-CSRF` cuando el logi
 - La grabación actual es solo de video. El audio se ignora.
 - Los clusters MKV se descargan al archivo aproximadamente cada 5 segundos para limitar memoria y pérdida ante cortes.
 - `FRAGATA_MAX_VIEWERS` limita las conexiones WebRTC simultáneas; el valor predeterminado es 32.
+- `FRAGATA_LIVE_IDLE_TIMEOUT` apaga FFmpeg o el substream de vista cuando ya no existen espectadores.
 - El escritor H.265 debe validarse con los modelos reales que se usarán antes de considerarlo producción estable.
 
 ## Pruebas
@@ -325,12 +388,13 @@ Prueba real recomendada:
 
 1. Agregar una cámara indicando solo IP y credenciales.
 2. Confirmar estado `en línea`.
-3. Abrir la vista en vivo con un perfil H.264.
-4. Esperar el cierre de un segmento MKV.
-5. Abrirlo en VLC o mpv.
-6. Cortar la red de la cámara y confirmar reconexión.
-7. Reiniciar Fragata durante un segmento y revisar recuperación del `.partial`.
-8. Confirmar creación del MKV y `.sha256` remotos por SFTP.
+3. Confirmar que el panel muestra la resolución máxima esperada; si es una cámara existente, usar **Redetectar calidad**.
+4. Abrir la página dedicada, probar pantalla completa y revisar si el modo es directo, FFmpeg o substream.
+5. Activar el switch de grabación y esperar el cierre de un segmento MKV.
+6. Abrirlo en VLC o mpv y verificar codec, ancho y alto con `ffprobe`.
+7. Cortar la red de la cámara y confirmar reconexión.
+8. Reiniciar Fragata durante un segmento y revisar recuperación del `.partial`.
+9. Confirmar creación del MKV y `.sha256` remotos por SFTP.
 
 ## Estructura
 
@@ -346,6 +410,7 @@ internal/recording/   segmentación y recuperación
 internal/rtsp/        conexión RTSP, sondeo de puertos y diccionario de rutas
 internal/store/       estado JSON atómico y secretos cifrados
 internal/stream/      distribución interna de RTP y access units
+internal/transcode/   integración opcional con FFmpeg para WebRTC
 internal/upload/      cola y transferencia SFTP
 contexto/             decisiones técnicas persistentes
 ```

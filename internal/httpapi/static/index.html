@@ -9,17 +9,21 @@
 <body>
   <header class="topbar">
     <div><span class="brand-mark">F</span><strong>Fragata</strong><span class="subtitle">Servidor de cámaras</span></div>
-    <div class="top-actions"><span id="queueBadge" class="badge">0 subidas</span><button id="logoutButton" class="ghost hidden">Cerrar sesión</button></div>
+    <div class="top-actions"><span id="ffmpegBadge" class="badge hidden">FFmpeg disponible</span><span id="queueBadge" class="badge">0 subidas</span><button id="logoutButton" class="ghost hidden">Cerrar sesión</button></div>
   </header>
   <main class="layout">
     <section class="panel add-panel">
       <div class="section-head">
         <div>
           <h1>Agregar cámara</h1>
-          <p>Introduce la IP y las credenciales. Fragata consultará ONVIF y después probará puertos y rutas RTSP conocidas.</p>
+          <p>Fragata elegirá el stream de mayor resolución para conservarlo sin recomprimir. La grabación permanece apagada hasta que la actives.</p>
         </div>
-        <button id="discoverButton" class="secondary">Detectar en red</button>
+        <div class="head-actions">
+          <button id="networkDiagnosticButton" class="ghost">Diagnosticar red</button>
+          <button id="discoverButton" class="secondary">Detectar en red</button>
+        </div>
       </div>
+      <div id="networkDiagnosticResults" class="network-diagnostic hidden"></div>
       <div id="discoveryResults" class="discovery hidden"></div>
       <form id="cameraForm" class="camera-form">
         <label>Nombre<input name="name" placeholder="Oficina"></label>
@@ -35,8 +39,8 @@
           <small>Es opcional. Puedes pegar la URL completa; se comprobará antes de guardarla. Es más seguro escribir usuario y contraseña en sus campos separados.</small>
         </label>
         <div class="checks wide">
-          <label><input name="record" type="checkbox" checked> Grabar en MKV</label>
-          <label><input name="upload" type="checkbox"> Subir por SFTP</label>
+          <label><input name="upload" type="checkbox"> Subir por SFTP cuando actives la grabación</label>
+          <small>La cámara se guarda con la grabación apagada. Actívala después desde su switch.</small>
         </div>
         <div class="wide form-actions"><button type="submit" class="primary">Detectar y guardar</button><span id="formStatus" role="status"></span></div>
       </form>

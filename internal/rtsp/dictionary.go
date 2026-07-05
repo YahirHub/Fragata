@@ -33,21 +33,38 @@ type Candidate struct {
 // limited to private camera IPs by the caller and never attempts credentials
 // other than those supplied by the user.
 type SearchOptions struct {
-	Ports          []int
-	ConnectTimeout time.Duration
-	ProbeTimeout   time.Duration
-	MaxCandidates  int
-	DictionaryPath string
-	Parallelism    int
+	Ports           []int
+	ConnectTimeout  time.Duration
+	ProbeTimeout    time.Duration
+	MaxCandidates   int
+	DictionaryPath  string
+	Parallelism     int
+	FindH264Preview bool
+}
+
+type SearchResult struct {
+	Primary ProbeResult  `json:"primary"`
+	Preview *ProbeResult `json:"preview,omitempty"`
 }
 
 // SearchReport contains safe diagnostics without credentials.
 type SearchReport struct {
-	OpenPorts          []int `json:"open_ports"`
-	CandidatesTried    int   `json:"candidates_tried"`
-	AuthenticationFail int   `json:"authentication_failures"`
-	NotFoundFail       int   `json:"not_found_failures"`
-	TimeoutFail        int   `json:"timeout_failures"`
+	OpenPorts          []int       `json:"open_ports"`
+	PortChecks         []PortCheck `json:"port_checks,omitempty"`
+	CandidatesTried    int         `json:"candidates_tried"`
+	AuthenticationFail int         `json:"authentication_failures"`
+	NotFoundFail       int         `json:"not_found_failures"`
+	TimeoutFail        int         `json:"timeout_failures"`
+}
+
+// PortCheck describes the TCP reachability of one camera port. It never
+// contains credentials or stream paths and is safe to expose to an admin.
+type PortCheck struct {
+	Port      int    `json:"port"`
+	Reachable bool   `json:"reachable"`
+	State     string `json:"state"`
+	ElapsedMS int64  `json:"elapsed_ms"`
+	Error     string `json:"error,omitempty"`
 }
 
 var builtinTemplates = []CandidateTemplate{
@@ -210,30 +227,32 @@ func parseTemplatePort(raw string) (int, error) {
 	return port, nil
 }
 
-// ReachablePorts checks each configured TCP port once. This prevents repeating
-// the same multi-second dial timeout for every path in the dictionary.
-func ReachablePorts(ctx context.Context, host string, ports []int, timeout time.Duration) []int {
+// CheckPorts checks each configured TCP port once and preserves the reason for
+// failure. This distinguishes a disabled service from a missing route, firewall
+// drop or isolated camera network.
+func CheckPorts(ctx context.Context, host string, ports []int, timeout time.Duration) []PortCheck {
 	ports = normalizePorts(ports)
 	if timeout <= 0 {
 		timeout = 1200 * time.Millisecond
 	}
-	type result struct {
-		port int
-		open bool
-	}
-	results := make(chan result, len(ports))
+	results := make(chan PortCheck, len(ports))
 	var wg sync.WaitGroup
 	for _, port := range ports {
 		port := port
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			started := time.Now()
 			dialer := net.Dialer{Timeout: timeout}
 			conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(strings.Trim(host, "[]"), strconv.Itoa(port)))
+			elapsed := time.Since(started).Milliseconds()
 			if err == nil {
 				_ = conn.Close()
+				results <- PortCheck{Port: port, Reachable: true, State: "open", ElapsedMS: elapsed}
+				return
 			}
-			results <- result{port: port, open: err == nil}
+			state, safeError := classifyDialError(err)
+			results <- PortCheck{Port: port, State: state, ElapsedMS: elapsed, Error: safeError}
 		}()
 	}
 	go func() {
@@ -241,19 +260,79 @@ func ReachablePorts(ctx context.Context, host string, ports []int, timeout time.
 		close(results)
 	}()
 
-	openSet := make(map[int]struct{})
+	byPort := make(map[int]PortCheck, len(ports))
 	for result := range results {
-		if result.open {
-			openSet[result.port] = struct{}{}
+		byPort[result.Port] = result
+	}
+	ordered := make([]PortCheck, 0, len(ports))
+	for _, port := range ports {
+		if result, ok := byPort[port]; ok {
+			ordered = append(ordered, result)
 		}
 	}
-	open := make([]int, 0, len(openSet))
-	for _, port := range ports {
-		if _, exists := openSet[port]; exists {
-			open = append(open, port)
+	return ordered
+}
+
+// ReachablePorts retains the original compact API used by callers that only
+// need the open port list.
+func ReachablePorts(ctx context.Context, host string, ports []int, timeout time.Duration) []int {
+	checks := CheckPorts(ctx, host, ports, timeout)
+	open := make([]int, 0, len(checks))
+	for _, check := range checks {
+		if check.Reachable {
+			open = append(open, check.Port)
 		}
 	}
 	return open
+}
+
+func classifyDialError(err error) (string, string) {
+	if err == nil {
+		return "open", ""
+	}
+	lower := strings.ToLower(err.Error())
+	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded") {
+		return "timeout", "tiempo de conexión agotado"
+	}
+	if strings.Contains(lower, "connection refused") || strings.Contains(lower, "conexión rehusada") || strings.Contains(lower, "actively refused") {
+		return "refused", "conexión rechazada"
+	}
+	if strings.Contains(lower, "network is unreachable") || strings.Contains(lower, "no route to host") || strings.Contains(lower, "network unreachable") {
+		return "no_route", "sin ruta hacia la red"
+	}
+	if strings.Contains(lower, "host is unreachable") || strings.Contains(lower, "host unreachable") {
+		return "unreachable", "host inalcanzable"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "canceled", "comprobación cancelada"
+	}
+	return "error", "error de conexión TCP"
+}
+
+// PortFailureSummary explains connectivity failures without implying that a
+// dictionary, URL or password can fix a TCP routing problem.
+func PortFailureSummary(host string, checks []PortCheck) string {
+	if len(checks) == 0 {
+		return fmt.Sprintf("no se pudieron comprobar puertos en %s", host)
+	}
+	states := make(map[string]int)
+	ports := make([]int, 0, len(checks))
+	for _, check := range checks {
+		states[check.State]++
+		ports = append(ports, check.Port)
+	}
+	switch {
+	case states["no_route"] > 0:
+		return fmt.Sprintf("Fragata no tiene una ruta de red hacia %s (puertos probados: %s); la URL y las credenciales todavía no se evaluaron", host, joinPorts(ports))
+	case states["unreachable"] > 0:
+		return fmt.Sprintf("el host %s es inalcanzable desde el entorno donde corre Fragata (puertos probados: %s); revise VLAN, aislamiento Wi-Fi, VPN o firewall", host, joinPorts(ports))
+	case states["timeout"] == len(checks):
+		return fmt.Sprintf("%s no respondió a conexiones TCP desde el entorno donde corre Fragata (puertos probados: %s); esto ocurre antes de validar ruta RTSP, usuario o contraseña", host, joinPorts(ports))
+	case states["refused"] == len(checks):
+		return fmt.Sprintf("%s es alcanzable, pero rechazó todos los puertos probados (%s); habilite RTSP/ONVIF o indique el puerto correcto", host, joinPorts(ports))
+	default:
+		return fmt.Sprintf("ningún puerto de cámara respondió correctamente en %s (probados: %s); revise el diagnóstico de red antes de cambiar la URL RTSP", host, joinPorts(ports))
+	}
 }
 
 func ExpandCandidates(host string, ports []int, custom []CandidateTemplate, max int) []Candidate {
@@ -296,6 +375,20 @@ func ExpandCandidates(host string, ports []int, custom []CandidateTemplate, max 
 // a TCP connection. Candidates are tested in small ordered batches to avoid
 // overloading low-cost cameras.
 func Search(ctx context.Context, host, username, password string, options SearchOptions) (ProbeResult, SearchReport, error) {
+	result, report, err := SearchStreams(ctx, host, username, password, options)
+	return result.Primary, report, err
+}
+
+// SearchStreams preserves vendor ordering but compares a bounded window after
+// the first success. This catches nearby main/substream and H.264/H.265 variants
+// without scanning the entire dictionary against a low-cost camera.
+type dictionaryProbe struct {
+	probe     ProbeResult
+	candidate Candidate
+	index     int
+}
+
+func SearchStreams(ctx context.Context, host, username, password string, options SearchOptions) (SearchResult, SearchReport, error) {
 	if options.ConnectTimeout <= 0 {
 		options.ConnectTimeout = 1200 * time.Millisecond
 	}
@@ -314,7 +407,7 @@ func Search(ctx context.Context, host, username, password string, options Search
 
 	custom, err := LoadCustomTemplates(options.DictionaryPath)
 	if err != nil {
-		return ProbeResult{}, SearchReport{}, err
+		return SearchResult{}, SearchReport{}, err
 	}
 	ports := append([]int(nil), options.Ports...)
 	for _, template := range custom {
@@ -322,78 +415,140 @@ func Search(ctx context.Context, host, username, password string, options Search
 			ports = append(ports, template.Port)
 		}
 	}
-	openPorts := ReachablePorts(ctx, host, ports, options.ConnectTimeout)
-	report := SearchReport{OpenPorts: openPorts}
+	portChecks := CheckPorts(ctx, host, ports, options.ConnectTimeout)
+	openPorts := make([]int, 0, len(portChecks))
+	for _, check := range portChecks {
+		if check.Reachable {
+			openPorts = append(openPorts, check.Port)
+		}
+	}
+	report := SearchReport{OpenPorts: openPorts, PortChecks: portChecks}
 	if len(openPorts) == 0 {
-		return ProbeResult{}, report, fmt.Errorf(
-			"ningún puerto RTSP respondió en %s (probados: %s); confirme que RTSP esté habilitado y que Fragata tenga acceso de red a la cámara",
-			host, joinPorts(ports),
-		)
+		return SearchResult{}, report, errors.New(PortFailureSummary(host, portChecks))
 	}
 
 	candidates := ExpandCandidates(host, openPorts, custom, options.MaxCandidates)
-	var h265Fallback *ProbeResult
-	for start := 0; start < len(candidates); start += options.Parallelism {
-		end := min(start+options.Parallelism, len(candidates))
+	var primary *dictionaryProbe
+	var preview *dictionaryProbe
+	stopAfter := len(candidates)
+	firstSuccess := -1
+
+	for start := 0; start < len(candidates) && start < stopAfter; start += options.Parallelism {
+		end := min(start+options.Parallelism, len(candidates), stopAfter)
 		batch := candidates[start:end]
 		type outcome struct {
-			index int
-			probe ProbeResult
-			err   error
+			batchIndex     int
+			candidateIndex int
+			candidate      Candidate
+			probe          ProbeResult
+			err            error
 		}
 		outcomes := make(chan outcome, len(batch))
-		for index, candidate := range batch {
-			index, candidate := index, candidate
+		for batchIndex, candidate := range batch {
+			batchIndex, candidate := batchIndex, candidate
+			candidateIndex := start + batchIndex
 			go func() {
 				withAuth, authErr := WithCredentials(candidate.URL, username, password)
 				if authErr != nil {
-					outcomes <- outcome{index: index, err: authErr}
+					outcomes <- outcome{batchIndex: batchIndex, candidateIndex: candidateIndex, candidate: candidate, err: authErr}
 					return
 				}
 				probeCtx, cancel := context.WithTimeout(ctx, options.ProbeTimeout)
 				defer cancel()
 				probe, probeErr := Probe(probeCtx, withAuth, options.ProbeTimeout)
-				outcomes <- outcome{index: index, probe: probe, err: probeErr}
+				outcomes <- outcome{batchIndex: batchIndex, candidateIndex: candidateIndex, candidate: candidate, probe: probe, err: probeErr}
 			}()
 		}
 
 		batchResults := make([]outcome, len(batch))
 		for range batch {
 			result := <-outcomes
-			batchResults[result.index] = result
+			batchResults[result.batchIndex] = result
 		}
 		for _, result := range batchResults {
 			report.CandidatesTried++
 			if result.err == nil {
-				if strings.EqualFold(result.probe.Codec, "H264") {
-					return result.probe, report, nil
+				found := &dictionaryProbe{probe: result.probe, candidate: result.candidate, index: result.candidateIndex}
+				if primary == nil || betterDictionaryProbe(found, primary) {
+					primary = found
 				}
-				if h265Fallback == nil {
-					copy := result.probe
-					h265Fallback = &copy
+				if strings.EqualFold(found.probe.Codec, "H264") && (preview == nil || betterDictionaryProbe(found, preview)) {
+					preview = found
+				}
+				if !options.FindH264Preview {
+					return SearchResult{Primary: found.probe}, report, nil
+				}
+				if firstSuccess < 0 {
+					firstSuccess = result.candidateIndex
+					// Main, secondary and codec variants from one vendor are kept
+					// adjacent. Probe a bounded window so H.264 is never chosen
+					// merely because it appeared just before a higher-quality H.265.
+					stopAfter = min(len(candidates), firstSuccess+16)
 				}
 				continue
 			}
 			classifySearchFailure(&report, result.err)
 		}
 		if err := ctx.Err(); err != nil {
-			if h265Fallback != nil {
-				return *h265Fallback, report, nil
+			if primary != nil {
+				return dictionarySearchResult(primary, preview), report, nil
 			}
-			return ProbeResult{}, report, err
+			return SearchResult{}, report, err
 		}
 	}
-	if h265Fallback != nil {
-		return *h265Fallback, report, nil
+	if primary != nil {
+		return dictionarySearchResult(primary, preview), report, nil
 	}
 
 	switch {
 	case report.AuthenticationFail > 0 && report.AuthenticationFail >= report.NotFoundFail:
-		return ProbeResult{}, report, fmt.Errorf("el servicio RTSP respondió en los puertos %s, pero rechazó las credenciales", joinPorts(openPorts))
+		return SearchResult{}, report, fmt.Errorf("el servicio RTSP respondió en los puertos %s, pero rechazó las credenciales", joinPorts(openPorts))
 	case report.NotFoundFail > 0:
-		return ProbeResult{}, report, fmt.Errorf("el servicio RTSP respondió en los puertos %s, pero ninguna de %d rutas conocidas entregó video", joinPorts(openPorts), report.CandidatesTried)
+		return SearchResult{}, report, fmt.Errorf("el servicio RTSP respondió en los puertos %s, pero ninguna de %d rutas conocidas entregó video", joinPorts(openPorts), report.CandidatesTried)
 	default:
-		return ProbeResult{}, report, fmt.Errorf("se encontraron puertos abiertos %s, pero no se pudo confirmar un stream H.264/H.265 después de %d intentos", joinPorts(openPorts), report.CandidatesTried)
+		return SearchResult{}, report, fmt.Errorf("se encontraron puertos abiertos %s, pero no se pudo confirmar un stream H.264/H.265 después de %d intentos", joinPorts(openPorts), report.CandidatesTried)
+	}
+}
+
+func dictionarySearchResult(primary, preview *dictionaryProbe) SearchResult {
+	result := SearchResult{Primary: primary.probe}
+	if !strings.EqualFold(primary.probe.Codec, "H264") && preview != nil && preview.probe.URL != primary.probe.URL {
+		copy := preview.probe
+		result.Preview = &copy
+	}
+	return result
+}
+
+func betterDictionaryProbe(candidate, current *dictionaryProbe) bool {
+	candidatePixels := int64(candidate.probe.Width) * int64(candidate.probe.Height)
+	currentPixels := int64(current.probe.Width) * int64(current.probe.Height)
+	if candidatePixels != currentPixels {
+		return candidatePixels > currentPixels
+	}
+	candidatePriority := dictionaryCandidatePriority(candidate.candidate)
+	currentPriority := dictionaryCandidatePriority(current.candidate)
+	if candidatePriority != currentPriority {
+		return candidatePriority > currentPriority
+	}
+	candidateH265 := strings.EqualFold(candidate.probe.Codec, "H265")
+	currentH265 := strings.EqualFold(current.probe.Codec, "H265")
+	if candidateH265 != currentH265 {
+		return candidateH265
+	}
+	return candidate.index < current.index
+}
+
+func dictionaryCandidatePriority(candidate Candidate) int {
+	value := strings.ToLower(candidate.Name + " " + candidate.URL)
+	switch {
+	case strings.Contains(value, "terciario"), strings.Contains(value, "subtype=2"), strings.Contains(value, "channels/103"):
+		return -200
+	case strings.Contains(value, "secundario"), strings.Contains(value, " sub "), strings.Contains(value, "_sub"), strings.Contains(value, "subtype=1"), strings.Contains(value, "channels/102"):
+		return -100
+	case strings.Contains(value, "principal"), strings.Contains(value, " main"), strings.Contains(value, "_main"), strings.Contains(value, "subtype=0"), strings.Contains(value, "channels/101"):
+		return 100
+	default:
+		return 0
 	}
 }
 

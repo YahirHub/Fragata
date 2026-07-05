@@ -25,6 +25,7 @@ async function api(path, options = {}) {
 async function init() {
   session = await api('/api/session');
   q('#logoutButton').classList.toggle('hidden', !session.auth_enabled);
+  q('#ffmpegBadge').classList.toggle('hidden', !session.ffmpeg_available);
   await refreshAll();
   setInterval(refreshStatus, 3000);
   setInterval(refreshUploads, 7000);
@@ -48,14 +49,22 @@ async function refreshUploads() {
 }
 
 function renderCameras() {
+  for (const id of Array.from(peers.keys())) stopLive(id);
   q('#cameraGrid').innerHTML = '';
   q('#emptyState').classList.toggle('hidden', cameras.length > 0);
   for (const camera of cameras) {
     const card = document.createElement('article');
     card.className = 'camera-card';
     card.id = `camera-${camera.id}`;
-    card.innerHTML = `<div class="video-wrap"><video id="video-${camera.id}" autoplay muted playsinline></video><div class="video-placeholder" id="placeholder-${camera.id}">Vista detenida</div></div><div class="camera-content"><div class="camera-line"><h3>${esc(camera.name)}</h3><span class="state" data-state>iniciando</span></div><div class="meta"><span>${esc(camera.host)}</span><span data-codec>${esc(camera.codec || '—')}</span><span>${camera.width && camera.height ? `${camera.width}×${camera.height}` : 'Resolución automática'}</span><span data-record>${camera.record ? 'MKV activo' : 'Sin grabación'}</span></div><div class="error" data-error></div><div class="card-actions"><button class="secondary" data-live>Ver en vivo</button><button class="ghost danger" data-delete>Eliminar</button></div></div>`;
+    const primaryResolution = camera.width && camera.height ? `${camera.width}×${camera.height}` : 'Resolución pendiente';
+    const previewResolution = camera.live_width && camera.live_height ? `${camera.live_width}×${camera.live_height}` : '';
+    const previewText = camera.codec === 'H264'
+      ? 'Vista directa del stream principal'
+      : (camera.live_codec === 'H264' ? `Vista alternativa H.264${previewResolution ? ` · ${previewResolution}` : ''}` : 'Vista H.265 mediante FFmpeg cuando esté disponible');
+    card.innerHTML = `<div class="video-wrap"><video id="video-${camera.id}" autoplay muted playsinline></video><div class="video-placeholder" id="placeholder-${camera.id}">Vista detenida</div></div><div class="camera-content"><div class="camera-line"><h3>${esc(camera.name)}</h3><span class="state" data-state>iniciando</span></div><div class="meta"><span>${esc(camera.host)}</span><span data-codec>${esc(camera.codec || '—')}</span><span>${esc(primaryResolution)} · calidad principal</span><span data-live-mode>${esc(previewText)}</span><span data-record>${camera.record ? 'MKV activo' : 'Grabación apagada'}</span></div><div class="record-control"><span><strong>Grabación</strong><small>Conserva el stream principal sin recomprimir</small></span><label class="switch"><input type="checkbox" data-record-toggle aria-label="Activar grabación de ${esc(camera.name)}" ${camera.record ? 'checked' : ''}><span class="switch-slider"></span></label></div><div class="error" data-error></div><div class="card-actions"><button class="secondary" data-live>Vista rápida</button><a class="button-link primary" href="/camera/${encodeURIComponent(camera.id)}">Abrir cámara</a><button class="ghost" data-redetect>Redetectar calidad</button><button class="ghost danger" data-delete>Eliminar</button></div></div>`;
     card.querySelector('[data-live]').addEventListener('click', () => toggleLive(camera.id));
+    card.querySelector('[data-record-toggle]').addEventListener('change', (event) => setRecording(camera.id, event.currentTarget));
+    card.querySelector('[data-redetect]').addEventListener('click', (event) => redetectCamera(camera.id, event.currentTarget));
     card.querySelector('[data-delete]').addEventListener('click', () => deleteCamera(camera.id, camera.name));
     q('#cameraGrid').append(card);
     updateCard(camera);
@@ -72,10 +81,24 @@ function updateCard(camera) {
   state.className = `state ${status.state}`;
   card.querySelector('[data-codec]').textContent = status.codec || camera.codec || '—';
   card.querySelector('[data-error]').textContent = status.last_error || '';
-  card.querySelector('[data-record]').textContent = status.recording_path ? 'Grabando MKV' : (camera.record ? 'Esperando fotograma clave' : 'Sin grabación');
+  card.querySelector('[data-record]').textContent = status.recording_path ? 'Grabando MKV' : (camera.record ? 'Esperando fotograma clave' : 'Grabación apagada');
+  const toggle = card.querySelector('[data-record-toggle]');
+  if (!toggle.disabled) toggle.checked = camera.record;
+  const liveMode = card.querySelector('[data-live-mode]');
+  if (status.live_mode) liveMode.textContent = liveModeLabel(status.live_mode, camera);
   const liveButton = card.querySelector('[data-live]');
   liveButton.disabled = status.state !== 'online' && !peers.has(camera.id);
   liveButton.textContent = peers.has(camera.id) ? 'Detener vista' : 'Ver en vivo';
+}
+
+function liveModeLabel(mode, camera) {
+  if (mode === 'direct') return 'Vista directa del stream principal';
+  if (mode === 'ffmpeg') return 'Vista del stream principal transcodificada con FFmpeg';
+  if (mode === 'substream') {
+    const resolution = camera.live_width && camera.live_height ? ` · ${camera.live_width}×${camera.live_height}` : '';
+    return `Vista mediante substream H.264${resolution}`;
+  }
+  return mode;
 }
 
 function translateState(value) {
@@ -106,10 +129,59 @@ async function toggleLive(id) {
       method: 'POST', body: JSON.stringify({ sdp: peer.localDescription.sdp }),
     });
     await peer.setRemoteDescription({ type: 'answer', sdp: answer.sdp });
-    updateCard(cameras.find((camera) => camera.id === id));
+    const camera = cameras.find((item) => item.id === id);
+    if (camera) {
+      const card = q(`#camera-${CSS.escape(id)}`);
+      const liveMode = card?.querySelector('[data-live-mode]');
+      if (liveMode && answer.mode) liveMode.textContent = liveModeLabel(answer.mode, camera);
+    }
+    if (camera) updateCard(camera);
   } catch (error) {
     stopLive(id);
     alert(error.message);
+  }
+}
+
+async function redetectCamera(id, button) {
+  const camera = cameras.find((item) => item.id === id);
+  if (!camera) return;
+  button.disabled = true;
+  const original = button.textContent;
+  button.textContent = 'Detectando…';
+  stopLive(id);
+  try {
+    const result = await api(`/api/cameras/${encodeURIComponent(id)}/redetect`, {
+      method: 'POST',
+      body: '{}',
+    });
+    const updated = result.camera;
+    alert(`Calidad actualizada: ${updated.codec || 'video'} ${updated.width && updated.height ? `${updated.width}×${updated.height}` : ''}`.trim());
+    await refreshAll();
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+async function setRecording(id, toggle) {
+  const camera = cameras.find((item) => item.id === id);
+  if (!camera) return;
+  const previous = camera.record;
+  toggle.disabled = true;
+  try {
+    const updated = await api(`/api/cameras/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ record: toggle.checked }),
+    });
+    Object.assign(camera, updated);
+    await refreshAll();
+  } catch (error) {
+    toggle.checked = previous;
+    alert(error.message);
+  } finally {
+    toggle.disabled = false;
   }
 }
 
@@ -136,7 +208,7 @@ function stopLive(id) {
   const video = q(`#video-${CSS.escape(id)}`);
   if (video) {
     video.srcObject = null;
-    q(`#placeholder-${CSS.escape(id)}`).classList.remove('hidden');
+    q(`#placeholder-${CSS.escape(id)}`)?.classList.remove('hidden');
   }
   const camera = cameras.find((item) => item.id === id);
   if (camera) updateCard(camera);
@@ -145,7 +217,7 @@ function stopLive(id) {
 function cameraFormData() {
   const form = q('#cameraForm');
   const data = Object.fromEntries(new FormData(form));
-  data.record = form.elements.record.checked;
+  data.record = false;
   data.upload = form.elements.upload.checked;
   data.host = String(data.host || '').trim();
   data.rtsp_url = String(data.rtsp_url || '').trim();
@@ -173,7 +245,8 @@ q('#probeRTSPButton').addEventListener('click', async () => {
       }),
     });
     if (!q('#cameraForm').elements.host.value.trim()) q('#cameraForm').elements.host.value = probe.host;
-    status.textContent = `URL válida: ${probe.codec} por el puerto ${probe.port}. Ya puedes guardarla.`;
+    const resolution = probe.width && probe.height ? ` · ${probe.width}×${probe.height}` : '';
+    status.textContent = `URL válida: ${probe.codec}${resolution} por el puerto ${probe.port}. Ya puedes guardarla.`;
   } catch (error) {
     status.textContent = error.message;
   } finally {
@@ -199,7 +272,6 @@ q('#cameraForm').addEventListener('submit', async (event) => {
     const openPorts = result.diagnostics?.open_ports?.length ? ` Puertos detectados: ${result.diagnostics.open_ports.join(', ')}.` : '';
     status.textContent = `Cámara agregada mediante ${friendlyMethod(result.detection_method)}.${openPorts}`;
     form.reset();
-    form.elements.record.checked = true;
     await refreshAll();
   } catch (error) {
     status.textContent = error.message;
@@ -253,3 +325,53 @@ q('#logoutButton').addEventListener('click', async () => {
 });
 window.addEventListener('beforeunload', () => peers.forEach((peer) => peer.close()));
 init().catch((error) => { q('#cameraSummary').textContent = error.message; });
+
+function diagnosticTarget(data) {
+  if (data.host) return data.host;
+  if (!data.rtsp_url) return '';
+  try {
+    return new URL(data.rtsp_url).hostname;
+  } catch (_) {
+    return data.rtsp_url;
+  }
+}
+
+function portStateLabel(state) {
+  return ({
+    open: 'abierto',
+    timeout: 'sin respuesta',
+    refused: 'rechazado',
+    no_route: 'sin ruta',
+    unreachable: 'inalcanzable',
+    canceled: 'cancelado',
+    error: 'error',
+  }[state] || state);
+}
+
+q('#networkDiagnosticButton').addEventListener('click', async () => {
+  const button = q('#networkDiagnosticButton');
+  const box = q('#networkDiagnosticResults');
+  const data = cameraFormData();
+  const host = diagnosticTarget(data);
+  if (!host) {
+    box.classList.remove('hidden');
+    box.textContent = 'Introduce la IP o la URL RTSP de la cámara.';
+    return;
+  }
+  button.disabled = true;
+  box.classList.remove('hidden');
+  box.textContent = 'Comprobando la red desde el mismo proceso de Fragata…';
+  try {
+    const report = await api('/api/network/diagnose', {
+      method: 'POST',
+      body: JSON.stringify({ host }),
+    });
+    const ports = report.port_checks.map((item) => `<span class="port-state ${esc(item.state)}"><strong>${item.port}</strong> ${esc(portStateLabel(item.state))} · ${item.elapsed_ms} ms</span>`).join('');
+    const addresses = report.local_addresses.length ? report.local_addresses.map(esc).join(', ') : 'no detectadas';
+    box.innerHTML = `<strong>${esc(report.summary)}</strong><p>${esc(report.recommendation)}</p><div class="port-list">${ports}</div><small>Entorno: ${report.in_container ? 'contenedor' : 'host'} · Interfaces: ${addresses} · Misma subred local: ${report.same_local_subnet ? 'sí' : 'no'}</small>`;
+  } catch (error) {
+    box.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});

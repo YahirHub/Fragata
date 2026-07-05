@@ -8,8 +8,8 @@ Documentar el alcance del MVP inicial de Fragata y separar con claridad la revis
 - Mantener el proyecto sin `go.sum` para que el propietario ejecute `go mod tidy` en su entorno.
 - No ejecutar `go mod download`, `go mod tidy`, `go test` ni `go build` en el entorno de entrega.
 - No incluir binarios, módulos descargados, datos de ejecución ni credenciales.
-- Priorizar H.264 durante la detección automática para mejorar la compatibilidad de la vista web; H.265 queda disponible para grabación.
-- Mantener el MVP sin transcodificación y sin FFmpeg en producción.
+- Esta decisión fue sustituida en 0.3.0 por `08-calidad-grabacion-y-visor.md`: la grabación selecciona máxima resolución aunque sea H.265.
+- El binario no requiere FFmpeg; puede invocarlo externamente y bajo demanda solo para la vista web.
 
 # Arquitectura actual
 
@@ -42,7 +42,7 @@ Las versiones exactas están declaradas en `go.mod` y deben resolverse mediante 
 - No se dispone de cámara física ni servidor SFTP dentro del entorno de entrega.
 - La compilación real depende de módulos externos todavía no descargados.
 - La compatibilidad ONVIF y RTSP varía según fabricante y firmware.
-- La vista web requiere H.264 porque no existe transcodificación H.265 a H.264.
+- WebRTC requiere H.264. Desde 0.3.0 Fragata puede obtenerlo mediante FFmpeg externo o un substream H.264, sin alterar la grabación principal.
 
 # Soluciones implementadas
 - Fallback desde ONVIF hacia rutas RTSP comunes de Imou/Dahua, Hikvision, Reolink y cámaras genéricas.

@@ -6,7 +6,7 @@ Crear Fragata, un servidor ligero de cámaras IP en Go que pueda detectar cámar
 
 # Decisiones tomadas
 - Un único binario con `CGO_ENABLED=0`.
-- Sin FFmpeg ni transcodificación dentro del proceso.
+- Sin transcodificación obligatoria dentro del proceso; desde 0.3.0 puede invocar FFmpeg externo de forma opcional solo para vista H.265.
 - ONVIF se usa para descubrimiento y obtención de perfiles; RTSP transporta el video.
 - El login es opcional: solo se activa cuando usuario y contraseña están completos en `.env`.
 - Las sesiones son persistentes y sobreviven reinicios.
@@ -33,13 +33,13 @@ Crear Fragata, un servidor ligero de cámaras IP en Go que pueda detectar cámar
 Proyecto inicial completo.
 
 # Problemas encontrados
-- Un binario estático no puede depender de FFmpeg para transcodificar.
+- El binario estático no incluye ni requiere FFmpeg; si existe en el host, puede invocarlo como proceso externo opcional.
 - H.265 no tiene compatibilidad web uniforme.
 - La escritura MKV sin una biblioteca C requiere implementar el subconjunto Matroska usado por cámaras.
 
 # Soluciones implementadas
 - Remux directo de H.264/H.265 sin pérdida.
-- Vista web limitada a H.264.
+- WebRTC continúa transportando H.264; un stream H.265 puede visualizarse mediante FFmpeg externo o un substream H.264.
 - Segmentación y cierre atómico de MKV.
 - Fallback de rutas RTSP cuando ONVIF no funciona.
 

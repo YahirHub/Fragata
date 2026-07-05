@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -40,6 +39,8 @@ type ProbeResponse struct {
 	RTSPURL string `json:"rtsp_url"`
 	Codec   string `json:"codec"`
 	Port    int    `json:"port"`
+	Width   int    `json:"width,omitempty"`
+	Height  int    `json:"height,omitempty"`
 }
 
 type DetectionResult struct {
@@ -61,28 +62,36 @@ func Detect(ctx context.Context, cfg config.Config, request AddRequest) (Detecti
 		}
 		base.RTSPURL = probe.RTSPURL
 		base.Codec = probe.Codec
+		base.Width = probe.Width
+		base.Height = probe.Height
+		setDirectLiveStream(&base)
 		return DetectionResult{Camera: base, Method: "rtsp-manual"}, nil
 	}
 
 	onvifClient := onvif.NewClient(cfg.ProbeTimeout, base.Username, base.Password, request.InsecureTLS)
 	inspection, onvifErr := onvifClient.Inspect(ctx, base.Host)
 	if onvifErr == nil {
-		profiles := append([]onvif.Profile(nil), inspection.Profiles...)
-		sort.SliceStable(profiles, func(i, j int) bool {
-			iH264 := strings.EqualFold(profiles[i].Encoding, "H264")
-			jH264 := strings.EqualFold(profiles[j].Encoding, "H264")
-			if iH264 != jH264 {
-				return iH264
-			}
-			return profiles[i].Width*profiles[i].Height > profiles[j].Width*profiles[j].Height
-		})
+		type detectedProfile struct {
+			profile onvif.Profile
+			probe   fragrtsp.ProbeResult
+			width   int
+			height  int
+			order   int
+		}
+		var primary *detectedProfile
+		var preview *detectedProfile
 		var last error
-		for _, profile := range profiles {
+		seenURLs := make(map[string]struct{})
+		for order, profile := range inspection.Profiles {
 			streamURL := inspection.StreamURIs[profile.Token]
 			if streamURL == "" {
 				continue
 			}
 			streamURL = fragrtsp.NormalizeHost(streamURL, base.Host)
+			if _, exists := seenURLs[streamURL]; exists {
+				continue
+			}
+			seenURLs[streamURL] = struct{}{}
 			withAuth, err := fragrtsp.WithCredentials(streamURL, base.Username, base.Password)
 			if err != nil {
 				last = err
@@ -93,15 +102,34 @@ func Detect(ctx context.Context, cfg config.Config, request AddRequest) (Detecti
 				last = err
 				continue
 			}
-			base.RTSPURL = probe.URL
-			base.Codec = probe.Codec
-			base.Width = profile.Width
-			base.Height = profile.Height
-			base.ProfileToken = profile.Token
+			width, height := preferredDimensions(profile.Width, profile.Height, probe.Width, probe.Height)
+			candidate := &detectedProfile{profile: profile, probe: probe, width: width, height: height, order: order}
+			if primary == nil || betterVideo(candidate.width, candidate.height, candidate.probe.Codec, candidate.order, primary.width, primary.height, primary.probe.Codec, primary.order) {
+				primary = candidate
+			}
+			if strings.EqualFold(probe.Codec, "H264") && (preview == nil || betterVideo(candidate.width, candidate.height, candidate.probe.Codec, candidate.order, preview.width, preview.height, preview.probe.Codec, preview.order)) {
+				preview = candidate
+			}
+		}
+		if primary != nil {
+			base.RTSPURL = primary.probe.URL
+			base.Codec = primary.probe.Codec
+			base.Width = primary.width
+			base.Height = primary.height
+			base.ProfileToken = primary.profile.Token
 			base.Manufacturer = inspection.Information.Manufacturer
 			base.Model = inspection.Information.Model
 			base.SerialNumber = inspection.Information.SerialNumber
 			base.FirmwareVersion = inspection.Information.FirmwareVersion
+			if strings.EqualFold(primary.probe.Codec, "H264") {
+				setDirectLiveStream(&base)
+			} else if preview != nil {
+				base.LiveRTSPURL = preview.probe.URL
+				base.LiveCodec = preview.probe.Codec
+				base.LiveWidth = preview.width
+				base.LiveHeight = preview.height
+				base.LiveProfileToken = preview.profile.Token
+			}
 			return DetectionResult{Camera: base, Method: "onvif"}, nil
 		}
 		if last != nil {
@@ -115,17 +143,28 @@ func Detect(ctx context.Context, cfg config.Config, request AddRequest) (Detecti
 	if requestedPort > 0 {
 		ports = prependUniquePort(ports, requestedPort)
 	}
-	probe, report, searchErr := fragrtsp.Search(ctx, base.Host, base.Username, base.Password, fragrtsp.SearchOptions{
-		Ports:          ports,
-		ConnectTimeout: cfg.RTSPConnectTimeout,
-		ProbeTimeout:   cfg.RTSPCandidateTimeout,
-		MaxCandidates:  cfg.RTSPMaxCandidates,
-		DictionaryPath: cfg.RTSPDictionaryPath,
-		Parallelism:    4,
+	streams, report, searchErr := fragrtsp.SearchStreams(ctx, base.Host, base.Username, base.Password, fragrtsp.SearchOptions{
+		Ports:           ports,
+		ConnectTimeout:  cfg.RTSPConnectTimeout,
+		ProbeTimeout:    cfg.RTSPCandidateTimeout,
+		MaxCandidates:   cfg.RTSPMaxCandidates,
+		DictionaryPath:  cfg.RTSPDictionaryPath,
+		Parallelism:     4,
+		FindH264Preview: true,
 	})
 	if searchErr == nil {
-		base.RTSPURL = probe.URL
-		base.Codec = probe.Codec
+		base.RTSPURL = streams.Primary.URL
+		base.Codec = streams.Primary.Codec
+		base.Width = streams.Primary.Width
+		base.Height = streams.Primary.Height
+		if strings.EqualFold(streams.Primary.Codec, "H264") {
+			setDirectLiveStream(&base)
+		} else if streams.Preview != nil {
+			base.LiveRTSPURL = streams.Preview.URL
+			base.LiveCodec = streams.Preview.Codec
+			base.LiveWidth = streams.Preview.Width
+			base.LiveHeight = streams.Preview.Height
+		}
 		return DetectionResult{Camera: base, Method: "rtsp-dictionary", Diagnostics: &report}, nil
 	}
 	if onvifErr != nil {
@@ -149,6 +188,21 @@ func ProbeManual(ctx context.Context, cfg config.Config, request ProbeRequest) (
 
 func probeManual(ctx context.Context, cfg config.Config, base model.Camera, rawURL string) (ProbeResponse, error) {
 	normalized := fragrtsp.NormalizeHost(rawURL, base.Host)
+	parsed, err := url.Parse(normalized)
+	if err != nil {
+		return ProbeResponse{}, errors.New("URL RTSP inválida")
+	}
+	port := 554
+	if parsed.Scheme == "rtsps" {
+		port = 322
+	}
+	if value, convErr := strconv.Atoi(parsed.Port()); convErr == nil && value > 0 {
+		port = value
+	}
+	checks := fragrtsp.CheckPorts(ctx, base.Host, []int{port}, cfg.RTSPConnectTimeout)
+	if len(checks) == 0 || !checks[0].Reachable {
+		return ProbeResponse{}, fmt.Errorf("no se pudo abrir la URL RTSP: %s", fragrtsp.PortFailureSummary(base.Host, checks))
+	}
 	withAuth, err := fragrtsp.WithCredentials(normalized, base.Username, base.Password)
 	if err != nil {
 		return ProbeResponse{}, err
@@ -157,12 +211,7 @@ func probeManual(ctx context.Context, cfg config.Config, base model.Camera, rawU
 	if err != nil {
 		return ProbeResponse{}, fmt.Errorf("no se pudo abrir la URL RTSP: %w", err)
 	}
-	u, _ := url.Parse(probe.URL)
-	port := 554
-	if value, convErr := strconv.Atoi(u.Port()); convErr == nil && value > 0 {
-		port = value
-	}
-	return ProbeResponse{Host: base.Host, RTSPURL: probe.URL, Codec: probe.Codec, Port: port}, nil
+	return ProbeResponse{Host: base.Host, RTSPURL: probe.URL, Codec: probe.Codec, Port: port, Width: probe.Width, Height: probe.Height}, nil
 }
 
 func prepareCamera(cfg config.Config, request AddRequest) (model.Camera, string, int, error) {
@@ -214,13 +263,43 @@ func prepareCamera(cfg config.Config, request AddRequest) (model.Camera, string,
 		Username: username,
 		Password: password,
 		Enabled:  boolValue(request.Enabled, true),
-		Record:   boolValue(request.Record, true),
+		Record:   boolValue(request.Record, false),
 		Upload:   boolValue(request.Upload, cfg.SFTP.Enabled),
 	}
 	if base.Name == "" {
 		base.Name = "Cámara " + host
 	}
 	return base, rawURL, requestedPort, nil
+}
+
+func betterVideo(width, height int, codec string, order int, currentWidth, currentHeight int, currentCodec string, currentOrder int) bool {
+	pixels := int64(width) * int64(height)
+	currentPixels := int64(currentWidth) * int64(currentHeight)
+	if pixels != currentPixels {
+		return pixels > currentPixels
+	}
+	if strings.EqualFold(codec, "H265") != strings.EqualFold(currentCodec, "H265") {
+		return strings.EqualFold(codec, "H265")
+	}
+	return order < currentOrder
+}
+
+func preferredDimensions(profileWidth, profileHeight, probedWidth, probedHeight int) (int, int) {
+	if probedWidth > 0 && probedHeight > 0 {
+		return probedWidth, probedHeight
+	}
+	return profileWidth, profileHeight
+}
+
+func setDirectLiveStream(camera *model.Camera) {
+	if camera == nil || !strings.EqualFold(camera.Codec, "H264") {
+		return
+	}
+	camera.LiveRTSPURL = camera.RTSPURL
+	camera.LiveCodec = camera.Codec
+	camera.LiveWidth = camera.Width
+	camera.LiveHeight = camera.Height
+	camera.LiveProfileToken = camera.ProfileToken
 }
 
 func normalizeHostInput(raw string) (string, int, error) {

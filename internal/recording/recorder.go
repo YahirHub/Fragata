@@ -88,6 +88,9 @@ func (r *Recorder) Run(ctx context.Context) error {
 }
 
 func ready(info stream.Info) bool {
+	if info.Width <= 0 || info.Height <= 0 {
+		return false
+	}
 	if info.Codec == "H264" {
 		return len(info.SPS) >= 4 && len(info.PPS) > 0
 	}

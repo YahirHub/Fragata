@@ -75,7 +75,7 @@ func (m *Manager) Offer(ctx context.Context, hub *stream.Hub, offerSDP string) (
 		webrtc.RTPCodecCapability{
 			MimeType:    webrtc.MimeTypeH264,
 			ClockRate:   90000,
-			SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+			SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1",
 		},
 		"video", "fragata",
 	)

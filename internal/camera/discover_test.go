@@ -33,4 +33,29 @@ func TestPrepareCameraAllowsExplicitCredentials(t *testing.T) {
 	if camera.Username != "admin" || camera.Password != "secret" {
 		t.Fatalf("unexpected credentials: %#v", camera)
 	}
+	if camera.Record {
+		t.Fatal("una cámara nueva no debe comenzar a grabar sin autorización explícita")
+	}
+}
+
+func TestBetterVideoPrefersPixelsBeforeCodec(t *testing.T) {
+	if !betterVideo(2304, 1296, "H265", 2, 640, 480, "H264", 1) {
+		t.Fatal("la resolución máxima debe tener prioridad sobre H.264")
+	}
+	if betterVideo(640, 480, "H264", 1, 2304, 1296, "H265", 2) {
+		t.Fatal("H.264 no debe desplazar un stream de mayor resolución")
+	}
+}
+
+func TestBetterVideoPrefersH265OnlyOnResolutionTie(t *testing.T) {
+	if !betterVideo(1920, 1080, "H265", 2, 1920, 1080, "H264", 1) {
+		t.Fatal("H.265 debe ganar solamente al empatar resolución")
+	}
+}
+
+func TestPreferredDimensionsUsesStreamSPS(t *testing.T) {
+	width, height := preferredDimensions(1920, 1080, 2304, 1296)
+	if width != 2304 || height != 1296 {
+		t.Fatalf("got %dx%d", width, height)
+	}
 }

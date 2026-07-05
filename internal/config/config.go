@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -35,6 +36,8 @@ type Config struct {
 	RTSPDictionaryPath   string
 	STUNServers          []string
 	MaxViewers           int
+	LiveIdleTimeout      time.Duration
+	FFmpegPath           string
 	SecretKey            []byte
 	SFTP                 SFTPConfig
 }
@@ -74,13 +77,14 @@ func Load(dotenvPath string) (Config, error) {
 		AllowPublicCameras:   envBool("FRAGATA_ALLOW_PUBLIC_CAMERAS", false),
 		DiscoveryTimeout:     envDuration("FRAGATA_DISCOVERY_TIMEOUT", 4*time.Second),
 		ProbeTimeout:         envDuration("FRAGATA_PROBE_TIMEOUT", 6*time.Second),
-		RTSPConnectTimeout:   envDuration("FRAGATA_RTSP_CONNECT_TIMEOUT", 1200*time.Millisecond),
+		RTSPConnectTimeout:   envDuration("FRAGATA_RTSP_CONNECT_TIMEOUT", 3*time.Second),
 		RTSPCandidateTimeout: envDuration("FRAGATA_RTSP_CANDIDATE_TIMEOUT", 3*time.Second),
 		RTSPPorts:            envIntList("FRAGATA_RTSP_PORTS", []int{554, 8554, 10554, 7070, 7447, 8555, 88, 80}),
 		RTSPMaxCandidates:    envInt("FRAGATA_RTSP_MAX_CANDIDATES", 160),
 		RTSPDictionaryPath:   strings.TrimSpace(os.Getenv("FRAGATA_RTSP_DICTIONARY")),
 		STUNServers:          envList("FRAGATA_STUN_SERVERS", nil),
 		MaxViewers:           envInt("FRAGATA_MAX_VIEWERS", 32),
+		LiveIdleTimeout:      envDuration("FRAGATA_LIVE_IDLE_TIMEOUT", 30*time.Second),
 		SFTP: SFTPConfig{
 			Enabled:        envBool("FRAGATA_SFTP_ENABLED", false),
 			Host:           strings.TrimSpace(os.Getenv("FRAGATA_SFTP_HOST")),
@@ -95,6 +99,11 @@ func Load(dotenvPath string) (Config, error) {
 			DeleteLocal:    envBool("FRAGATA_SFTP_DELETE_LOCAL", false),
 		},
 	}
+	ffmpegPath, err := resolveExecutable(strings.TrimSpace(os.Getenv("FRAGATA_FFMPEG_PATH")), "ffmpeg")
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.FFmpegPath = ffmpegPath
 
 	if cfg.AdminUser == "" || cfg.AdminPassword == "" {
 		cfg.AdminUser = ""
@@ -105,6 +114,9 @@ func Load(dotenvPath string) (Config, error) {
 	}
 	if cfg.MaxViewers < 1 || cfg.MaxViewers > 256 {
 		return Config{}, errors.New("FRAGATA_MAX_VIEWERS debe estar entre 1 y 256")
+	}
+	if cfg.LiveIdleTimeout < 10*time.Second || cfg.LiveIdleTimeout > 10*time.Minute {
+		return Config{}, errors.New("FRAGATA_LIVE_IDLE_TIMEOUT debe estar entre 10s y 10m")
 	}
 	if cfg.RTSPConnectTimeout < 100*time.Millisecond || cfg.RTSPConnectTimeout > 10*time.Second {
 		return Config{}, errors.New("FRAGATA_RTSP_CONNECT_TIMEOUT debe estar entre 100ms y 10s")
@@ -136,6 +148,21 @@ func Load(dotenvPath string) (Config, error) {
 	}
 	cfg.SecretKey = key
 	return cfg, nil
+}
+
+func resolveExecutable(configured, fallback string) (string, error) {
+	if configured == "" {
+		path, err := exec.LookPath(fallback)
+		if err != nil {
+			return "", nil
+		}
+		return path, nil
+	}
+	path, err := exec.LookPath(configured)
+	if err != nil {
+		return "", fmt.Errorf("FRAGATA_FFMPEG_PATH no apunta a un ejecutable válido: %w", err)
+	}
+	return path, nil
 }
 
 func (c Config) AuthEnabled() bool { return c.AdminUser != "" && c.AdminPassword != "" }
