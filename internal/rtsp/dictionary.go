@@ -30,8 +30,8 @@ type Candidate struct {
 }
 
 // SearchOptions bounds automatic RTSP discovery. The search is deliberately
-// limited to private camera IPs by the caller and never attempts credentials
-// other than those supplied by the user.
+// bounded by the caller and never attempts credentials other than those supplied
+// by the user. Hosts can be local IPs, public IPs or DNS names.
 type SearchOptions struct {
 	Ports           []int
 	ConnectTimeout  time.Duration

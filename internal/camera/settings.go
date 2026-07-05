@@ -8,6 +8,7 @@ import (
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
+	"net"
 	"net/url"
 	"strings"
 	"time"
@@ -240,6 +241,7 @@ func (m *Manager) Update(ctx context.Context, id string, request UpdateRequest) 
 				}
 			}
 			if candidate != "" {
+				candidate = normalizeSnapshotHost(candidate, updated.Host)
 				if validated, validateErr := validateSnapshotURL(candidate, updated.Host); validateErr == nil {
 					updated.SnapshotURL = validated
 				}
@@ -408,13 +410,30 @@ func camerasEqualForUpdate(left, right model.Camera) bool {
 		left.PersonConfidence == right.PersonConfidence && left.DetectionCooldownSecs == right.DetectionCooldownSecs && left.DetectionZone == right.DetectionZone
 }
 
+func normalizeSnapshotHost(raw, cameraHost string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Hostname() == "" {
+		return raw
+	}
+	port := parsed.Port()
+	host := strings.Trim(cameraHost, "[]")
+	if port != "" {
+		parsed.Host = net.JoinHostPort(host, port)
+	} else if strings.Contains(host, ":") {
+		parsed.Host = "[" + host + "]"
+	} else {
+		parsed.Host = host
+	}
+	return parsed.String()
+}
+
 func validateSnapshotURL(raw, cameraHost string) (string, error) {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
 		return "", errors.New("la URL de snapshot debe usar HTTP o HTTPS")
 	}
 	if !strings.EqualFold(strings.Trim(parsed.Hostname(), "[]"), strings.Trim(cameraHost, "[]")) {
-		return "", errors.New("la URL de snapshot debe pertenecer a la IP de la cámara")
+		return "", errors.New("la URL de snapshot debe pertenecer al host configurado para la cámara")
 	}
 	parsed.User = nil
 	return parsed.String(), nil

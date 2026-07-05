@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#4e73df">
   <title>Ajustes de cámara · Fragata</title>
-  <script src="/static/theme.js?v=0.8.2"></script>
+  <script src="/static/theme.js?v=0.8.3"></script>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css">
-  <link rel="stylesheet" href="/static/styles.css?v=0.8.2">
+  <link rel="stylesheet" href="/static/styles.css?v=0.8.3">
 </head>
 <body>
   <fragata-app-layout page-title="Ajustes de cámara" page-icon="bi-sliders" active="cameras">
@@ -36,7 +36,7 @@
           <div class="card-header bg-transparent form-section-header"><span class="form-section-icon"><i class="bi bi-router"></i></span><div><span class="section-kicker">Conexión</span><h2 class="h5 mb-1">Red y credenciales</h2><p class="text-body-secondary mb-0">Los cambios se validan antes de reemplazar la conexión activa.</p></div></div>
           <div class="card-body">
             <div class="row g-3">
-              <div class="col-md-6"><label class="form-label" for="cameraHost">Dirección IP</label><input id="cameraHost" class="form-control" name="host" inputmode="decimal" required></div>
+              <div class="col-md-6"><label class="form-label" for="cameraHost">IP o dominio</label><input id="cameraHost" class="form-control" name="host" inputmode="url" autocapitalize="none" autocomplete="off" spellcheck="false" required></div>
               <div class="col-md-6"><label class="form-label" for="cameraUsername">Usuario</label><input id="cameraUsername" class="form-control" name="username" autocomplete="username"></div>
               <div class="col-md-6"><label class="form-label" for="cameraPassword">Nueva contraseña</label><div class="input-group"><input id="cameraPassword" class="form-control" name="password" type="password" autocomplete="new-password" placeholder="Dejar vacía para conservar la actual"><button class="btn btn-outline-secondary" type="button" data-password-toggle="#cameraPassword" aria-label="Mostrar contraseña"><i class="bi bi-eye"></i></button></div><div id="passwordState" class="form-text">La contraseña actual nunca se muestra.</div></div>
               <div class="col-md-6 d-flex align-items-end"><button id="testConnectionButton" type="button" class="btn btn-outline-primary w-100"><i class="bi bi-plug me-2"></i>Probar configuración</button></div>
@@ -51,7 +51,7 @@
           <div class="card-body">
             <div class="form-check form-switch form-switch-lg mb-4"><input id="detectionEnabled" class="form-check-input" type="checkbox" role="switch"><label class="form-check-label" for="detectionEnabled"><strong>Activar detección</strong><small class="d-block text-body-secondary">Fragata solicitará una imagen a la cámara según el intervalo configurado.</small></label></div>
             <div id="detectionOptions" class="row g-3">
-              <div class="col-12"><label class="form-label" for="snapshotURL">URL de snapshot</label><div class="input-group"><span class="input-group-text"><i class="bi bi-image"></i></span><input id="snapshotURL" class="form-control font-monospace" type="url" placeholder="Detectada mediante ONVIF o introducida manualmente"></div><div class="form-text">Debe apuntar a la misma IP de la cámara. ONVIF suele generarla automáticamente al redetectar.</div></div>
+              <div class="col-12"><label class="form-label" for="snapshotURL">URL de snapshot</label><div class="input-group"><span class="input-group-text"><i class="bi bi-image"></i></span><input id="snapshotURL" class="form-control font-monospace" type="url" placeholder="Detectada mediante ONVIF o introducida manualmente"></div><div class="form-text">Debe apuntar al mismo host o dominio configurado para la cámara. ONVIF suele generarla automáticamente al redetectar.</div></div>
               <div class="col-md-6"><div class="form-check form-switch"><input id="detectMotion" class="form-check-input" type="checkbox" role="switch"><label class="form-check-label" for="detectMotion"><strong>Registrar movimiento</strong><small class="d-block text-body-secondary">Diferencia de imágenes con compensación de iluminación.</small></label></div></div>
               <div class="col-md-6"><div class="form-check form-switch"><input id="detectPerson" class="form-check-input" type="checkbox" role="switch"><label class="form-check-label" for="detectPerson"><strong>Confirmar personas</strong><small class="d-block text-body-secondary">Detector HOG/SVM embebido; se ejecuta solo cuando hay movimiento.</small></label></div></div>
               <div class="col-md-6"><label class="form-label d-flex justify-content-between" for="motionSensitivity"><span>Sensibilidad</span><strong id="motionSensitivityValue">65%</strong></label><input id="motionSensitivity" class="form-range" type="range" min="1" max="100" value="65"></div>
@@ -92,7 +92,7 @@
     </form>
   </fragata-app-layout>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
-  <script src="/static/layouts.js?v=0.8.2" defer></script>
+  <script src="/static/layouts.js?v=0.8.3" defer></script>
   <script src="/static/core.js" defer></script>
   <script src="/static/duration-picker.js" defer></script>
   <script src="/static/camera-settings.js" defer></script>

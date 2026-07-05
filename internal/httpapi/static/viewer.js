@@ -16,42 +16,72 @@ let lastFrameAt = 0;
 let lastVideoTime = -1;
 let shuttingDown = false;
 let initialized = false;
+let initInFlight = false;
 let initRetryTimer = null;
 let statusTimer = null;
+let healthTimer = null;
+let healthInFlight = false;
+let serverOnline = true;
 let remoteStream = null;
 let soundEnabled = false;
+let wakeLock = null;
+let monitorMode = localStorage.getItem('fragata.viewer.monitor-mode') !== 'false';
 
 const reconnectDelays = [0, 750, 1500, 2500, 4000, 6000, 8000, 10000];
 const audioReconnectDelays = [1000, 2500, 5000, 10000, 20000, 30000];
+const apiTimeout = 15000;
+const offerTimeout = 45000;
+const healthIntervalOnline = 8000;
+const healthIntervalOffline = 2500;
 const cameraID = decodeURIComponent(location.pathname.split('/').filter(Boolean).at(-1) || '');
 const q = (selector) => document.querySelector(selector);
 const notify = (message, type = 'primary') => window.FragataUI?.toast(message, type);
 
 async function api(path, options = {}) {
-  const headers = { ...(options.headers || {}) };
-  if (options.body) headers['Content-Type'] = 'application/json';
-  if (options.method && options.method !== 'GET') headers['X-Fragata-CSRF'] = session.csrf_token;
-  const response = await fetch(path, { ...options, headers });
-  if (response.status === 401) {
-    location.href = '/login';
-    throw new Error('Sesión vencida');
+  const { timeout = apiTimeout, ...fetchOptions } = options;
+  const headers = { ...(fetchOptions.headers || {}) };
+  if (fetchOptions.body) headers['Content-Type'] = 'application/json';
+  if (fetchOptions.method && fetchOptions.method !== 'GET') headers['X-Fragata-CSRF'] = session.csrf_token;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetch(path, { ...fetchOptions, headers, signal: controller.signal, cache: 'no-store' });
+    if (response.status === 401) {
+      location.href = '/login';
+      throw new Error('Sesión vencida');
+    }
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(body.error || `HTTP ${response.status}`);
+      error.httpStatus = response.status;
+      throw error;
+    }
+    return body;
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      const timeoutError = new Error('La solicitud agotó el tiempo de espera');
+      timeoutError.networkFailure = true;
+      throw timeoutError;
+    }
+    if (error instanceof TypeError) error.networkFailure = true;
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-  return body;
 }
 
 async function init() {
-  if (shuttingDown || initialized) return;
+  if (shuttingDown || initialized || initInFlight || !serverOnline) return;
   clearTimeout(initRetryTimer);
   initRetryTimer = null;
-  showConnecting();
+  initInFlight = true;
+  showConnecting('Conectando con Fragata');
 
   try {
-    session = await api('/api/session');
+    session = await api('/api/session', { timeout: 10000 });
     q('fragata-app-layout')?.setSession(session);
     q('#ffmpegBadge')?.classList.toggle('hidden', !session.ffmpeg_available);
-    camera = await api(`/api/cameras/${encodeURIComponent(cameraID)}`);
+    camera = await api(`/api/cameras/${encodeURIComponent(cameraID)}`, { timeout: 10000 });
     document.title = `${camera.name} · Fragata`;
     q('#cameraName').textContent = camera.name;
     q('#cameraSubtitle').textContent = `${camera.host} · ${camera.manufacturer || ''} ${camera.model || ''}`.trim();
@@ -65,14 +95,24 @@ async function init() {
     await Promise.all([refreshStatus(), refreshUploads()]);
 
     initialized = true;
+    retryAttempt = 0;
     startLive();
     clearInterval(statusTimer);
     statusTimer = setInterval(() => {
-      if (!document.hidden) refreshStatus().catch(() => {});
+      if (!document.hidden && serverOnline) refreshStatus().catch(() => {});
     }, 5000);
-  } catch (_) {
-    showConnecting();
-    initRetryTimer = setTimeout(init, 2500);
+    updateMonitorControl();
+    requestWakeLock();
+  } catch (error) {
+    initialized = false;
+    if (isNetworkFailure(error)) markServerUnavailable();
+    else showConnecting(error?.message || 'Esperando a la cámara');
+  } finally {
+    initInFlight = false;
+  }
+
+  if (!initialized && !shuttingDown) {
+    initRetryTimer = setTimeout(init, serverOnline ? 2500 : 5000);
   }
 }
 
@@ -162,10 +202,78 @@ function setViewerReady(ready) {
   overlay.classList.toggle('hidden', ready);
 }
 
-function showConnecting() {
+function showConnecting(label = 'Conectando') {
   const message = q('#viewerMessage');
-  if (message) message.textContent = 'Conectando';
+  if (message) message.textContent = label;
   setViewerReady(false);
+}
+
+function isNetworkFailure(error) {
+  return Boolean(error?.networkFailure || error instanceof TypeError);
+}
+
+function setRuntimeState(value, label) {
+  const state = q('#viewerState');
+  if (!state) return;
+  state.className = `camera-status ${value}`;
+  state.innerHTML = `<span class="status-dot"></span>${label}`;
+}
+
+function markServerUnavailable() {
+  if (shuttingDown) return;
+  const firstFailure = serverOnline;
+  serverOnline = false;
+  initialized = false;
+  clearInterval(statusTimer);
+  statusTimer = null;
+  clearTimeout(retryTimer);
+  retryTimer = null;
+  liveGeneration++;
+  disposePeer();
+  setRuntimeState('offline', 'servidor desconectado');
+  showConnecting('Fragata no está disponible · reintentando');
+  if (firstFailure) notify('Se perdió la conexión con Fragata. El visor se recuperará automáticamente.', 'warning');
+}
+
+async function checkServerHealth() {
+  clearTimeout(healthTimer);
+  healthTimer = null;
+  if (shuttingDown || healthInFlight) return;
+  healthInFlight = true;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
+    let response;
+    try {
+      response = await fetch('/healthz', { cache: 'no-store', signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const recovered = !serverOnline;
+    serverOnline = true;
+    if (recovered) {
+      notify('Fragata volvió a estar disponible. Recuperando la cámara…', 'success');
+      initialized = false;
+      retryAttempt = 0;
+      audioRetryAttempt = 0;
+      if (initInFlight) {
+        clearTimeout(initRetryTimer);
+        initRetryTimer = setTimeout(() => {
+          if (serverOnline && !initialized) init();
+        }, 300);
+      } else {
+        await init();
+      }
+    }
+  } catch (_) {
+    markServerUnavailable();
+  } finally {
+    healthInFlight = false;
+    if (!shuttingDown) {
+      healthTimer = setTimeout(checkServerHealth, serverOnline ? healthIntervalOnline : healthIntervalOffline);
+    }
+  }
 }
 
 function preferH264(transceiver) {
@@ -360,7 +468,7 @@ function disposePeer() {
 }
 
 function scheduleReconnect(generation, immediate = false) {
-  if (shuttingDown || generation !== liveGeneration) return;
+  if (shuttingDown || !serverOnline || generation !== liveGeneration) return;
   showConnecting();
   disposePeer();
   if (retryTimer) return;
@@ -395,7 +503,7 @@ function scheduleAudioReconnect(generation, immediate = false) {
 }
 
 async function startLive() {
-  if (shuttingDown) return;
+  if (shuttingDown || !serverOnline || !initialized) return;
   clearTimeout(retryTimer);
   retryTimer = null;
   disposePeer();
@@ -441,13 +549,15 @@ async function startLive() {
     const answer = await api(`/api/cameras/${encodeURIComponent(cameraID)}/offer`, {
       method: 'POST',
       body: JSON.stringify({ sdp: connection.localDescription.sdp, media: 'video' }),
+      timeout: offerTimeout,
     });
     if (!isCurrentLive(generation, connection)) return;
     await connection.setRemoteDescription({ type: 'answer', sdp: answer.sdp });
     q('#liveMode').textContent = liveModeLabel(answer.mode);
     armFrameDeadline(generation, connection);
-  } catch (_) {
-    scheduleReconnect(generation);
+  } catch (error) {
+    if (isNetworkFailure(error)) markServerUnavailable();
+    else scheduleReconnect(generation);
   }
 }
 
@@ -476,11 +586,13 @@ async function startAudio() {
     const answer = await api(`/api/cameras/${encodeURIComponent(cameraID)}/offer`, {
       method: 'POST',
       body: JSON.stringify({ sdp: connection.localDescription.sdp, media: 'audio' }),
+      timeout: offerTimeout,
     });
     if (!isCurrentAudio(generation, connection)) return;
     await connection.setRemoteDescription({ type: 'answer', sdp: answer.sdp });
-  } catch (_) {
-    scheduleAudioReconnect(generation);
+  } catch (error) {
+    if (isNetworkFailure(error)) markServerUnavailable();
+    else scheduleAudioReconnect(generation);
   }
 }
 
@@ -502,6 +614,48 @@ function waitICE(connection, stillCurrent) {
   });
 }
 
+function updateMonitorControl() {
+  const button = q('#monitorButton');
+  if (!button) return;
+  if (!('wakeLock' in navigator)) {
+    button.classList.add('hidden');
+    return;
+  }
+  button.classList.remove('hidden');
+  button.classList.toggle('btn-outline-secondary', !monitorMode);
+  button.classList.toggle('btn-outline-success', monitorMode);
+  button.setAttribute('aria-pressed', monitorMode ? 'true' : 'false');
+  button.innerHTML = monitorMode
+    ? (wakeLock
+      ? '<i class="bi bi-display-fill me-2"></i>Monitor activo'
+      : '<i class="bi bi-display me-2"></i>Monitor preparado')
+    : '<i class="bi bi-display me-2"></i>Activar monitor';
+}
+
+async function requestWakeLock() {
+  if (shuttingDown || !monitorMode || document.hidden || !('wakeLock' in navigator) || wakeLock) return;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release', () => {
+      wakeLock = null;
+      updateMonitorControl();
+      if (!shuttingDown && monitorMode && !document.hidden) setTimeout(requestWakeLock, 1000);
+    }, { once: true });
+    updateMonitorControl();
+  } catch (_) {
+    wakeLock = null;
+    updateMonitorControl();
+  }
+}
+
+async function releaseWakeLock() {
+  const current = wakeLock;
+  wakeLock = null;
+  if (current) {
+    try { await current.release(); } catch (_) { /* Ya estaba liberado. */ }
+  }
+}
+
 function stopLive() {
   shuttingDown = true;
   liveGeneration++;
@@ -509,12 +663,15 @@ function stopLive() {
   clearTimeout(retryTimer);
   clearTimeout(audioRetryTimer);
   clearTimeout(initRetryTimer);
+  clearTimeout(healthTimer);
   clearInterval(statusTimer);
   retryTimer = null;
   audioRetryTimer = null;
   initRetryTimer = null;
+  healthTimer = null;
   statusTimer = null;
   disposePeer();
+  releaseWakeLock();
 }
 
 q('#viewerVideo').addEventListener('error', () => scheduleReconnect(liveGeneration, true));
@@ -549,6 +706,13 @@ q('#audioButton').addEventListener('click', async () => {
     disposeAudioPeer();
     updateAudioControl();
   }
+});
+q('#monitorButton')?.addEventListener('click', async () => {
+  monitorMode = !monitorMode;
+  localStorage.setItem('fragata.viewer.monitor-mode', monitorMode ? 'true' : 'false');
+  updateMonitorControl();
+  if (monitorMode) await requestWakeLock();
+  else await releaseWakeLock();
 });
 q('#fullscreenButton').addEventListener('click', async () => {
   try {
@@ -599,17 +763,31 @@ q('fragata-app-layout')?.addEventListener('fragata-logout', async () => {
   location.href = '/login';
 });
 window.addEventListener('online', () => {
-  if (!lastFrameAt) {
+  checkServerHealth();
+  if (serverOnline && !lastFrameAt) {
     retryAttempt = 0;
     startLive();
   }
+});
+window.addEventListener('offline', markServerUnavailable);
+window.addEventListener('pageshow', () => {
+  if (!shuttingDown) checkServerHealth();
+});
+window.addEventListener('focus', () => {
+  if (!shuttingDown && (!lastFrameAt || Date.now() - lastFrameAt > 5000)) checkServerHealth();
 });
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && (!lastFrameAt || Date.now() - lastFrameAt > 5000)) {
+  if (document.hidden) return;
+  requestWakeLock();
+  checkServerHealth();
+  if (serverOnline && (!lastFrameAt || Date.now() - lastFrameAt > 5000)) {
     retryAttempt = 0;
     startLive();
   }
 });
+document.addEventListener('pointerdown', requestWakeLock, { once: true, passive: true });
 window.addEventListener('beforeunload', stopLive);
+updateMonitorControl();
 showConnecting();
 init();
+checkServerHealth();

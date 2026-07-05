@@ -73,7 +73,7 @@
     const button = event.currentTarget;
     const box = q('#networkDiagnosticResults');
     const host = diagnosticTarget(formData());
-    if (!host) { box.classList.remove('hidden'); box.textContent = 'Introduce la IP o URL RTSP de la cámara.'; return; }
+    if (!host) { box.classList.remove('hidden'); box.textContent = 'Introduce la IP, dominio o URL RTSP de la cámara.'; return; }
     button.disabled = true;
     box.classList.remove('hidden');
     box.textContent = 'Comprobando la red desde Fragata…';
@@ -111,7 +111,7 @@
     const form = event.currentTarget;
     if (!form.reportValidity()) return;
     const data = formData();
-    if (!data.host && !data.rtsp_url) return setStatus('Introduce la IP o una URL RTSP manual.', 'warning');
+    if (!data.host && !data.rtsp_url) return setStatus('Introduce la IP, dominio o una URL RTSP manual.', 'warning');
     const submit = form.querySelector('button[type="submit"]');
     submit.disabled = true;
     q('#probeRTSPButton').disabled = true;

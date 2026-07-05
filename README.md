@@ -9,7 +9,7 @@ El núcleo sigue siendo un único binario compilable con `CGO_ENABLED=0` y front
 Incluido:
 
 - Descubrimiento ONVIF por WS-Discovery.
-- Alta manual indicando únicamente IP, usuario y contraseña.
+- Alta manual mediante IP privada, IP pública o dominio/CNAME, con puerto opcional, usuario y contraseña.
 - Consulta ONVIF de información, perfiles y URL de transmisión.
 - Fallback mediante diccionario RTSP integrado para Imou/Dahua, Hikvision, Reolink, Uniview, Axis, Vivotek, Hanwha y firmware genérico.
 - Sondeo previo de puertos RTSP para no repetir timeouts por cada ruta.
@@ -23,7 +23,7 @@ Incluido:
 - Fallback a un substream H.264 cuando FFmpeg no está disponible o no puede iniciar.
 - Grabación MKV continua con duración configurable por cámara, rotación sin huecos y cierre atómico desde `.mkv.partial`.
 - Recuperación conservadora de parciales después de un apagado inesperado.
-- Vista en vivo WebRTC con reconexión automática, arranque desde el GOP actual, página dedicada por cámara y botón de pantalla completa.
+- Vista en vivo WebRTC con reconexión automática, supervisor de reinicio del servidor, modo monitor para tablets, arranque desde el GOP actual y pantalla completa.
 - Grabación apagada al agregar una cámara, switch persistente y componente reutilizable para elegir entre 1 minuto y 24 horas por archivo.
 - Audio en vivo y dentro del MKV para cámaras que entregan G.711 A-law, G.711 μ-law, Opus o AAC por RTSP.
 - Cola SFTP persistente, reintentos con backoff, `known_hosts`, archivo temporal remoto y checksum SHA-256.
@@ -59,7 +59,7 @@ No incluido todavía:
 - El navegador que abre el panel debe poder acceder a `cdn.jsdelivr.net` para cargar Bootstrap y Bootstrap Icons. El servidor Fragata no descarga esos archivos.
 - Una cámara con RTSP H.264 o H.265.
 - Para visualizar el stream H.265 principal manteniendo su resolución, una instalación de FFmpeg con el encoder `libx264`. Sin FFmpeg, Fragata intenta usar un substream H.264 de la cámara.
-- Acceso a la misma red local para WS-Discovery, salvo que se introduzca la IP manualmente.
+- Acceso a la misma red local para WS-Discovery. La alta manual también admite cámaras remotas mediante IP pública o dominio cuando sus puertos son alcanzables.
 
 ## Inicio rápido
 
@@ -78,6 +78,31 @@ Abre:
 ```text
 http://IP_DEL_SERVIDOR:8080
 ```
+
+### Host de escucha y cámaras externas
+
+El panel escucha por defecto en todas las interfaces mediante:
+
+```dotenv
+FRAGATA_LISTEN_HOST=0.0.0.0
+FRAGATA_LISTEN_PORT=8080
+```
+
+`FRAGATA_LISTEN=0.0.0.0:8080` continúa disponible como formato heredado y tiene prioridad si se define. Para limitar el panel al propio equipo puede usarse `127.0.0.1`.
+
+La alta de cámaras admite por defecto IP privadas, IP públicas, IPv4, IPv6 y dominios/CNAME:
+
+```dotenv
+FRAGATA_ALLOW_PUBLIC_CAMERAS=true
+```
+
+Para restaurar el modo estricto que solo permite destinos privados/locales:
+
+```dotenv
+FRAGATA_ALLOW_PUBLIC_CAMERAS=false
+```
+
+Un dominio debe resolver hacia un equipo que exponga realmente ONVIF/RTSP. Un proxy CDN HTTP tradicional no transporta RTSP por sí solo; puede utilizarse DNS directo, CNAME o un túnel que publique los puertos correspondientes.
 
 ### Login opcional
 
@@ -110,7 +135,7 @@ La administración está separada en rutas claras:
 - `/cameras`: CRUD y tabla de cámaras con búsqueda, filtros y menú de acciones.
 - `/cameras/new`: alta y detección de una cámara.
 - `/cameras/<id>/settings`: identidad, carpeta, red, credenciales, grabación y SFTP.
-- `/camera/<id>`: visor en vivo con audio opcional y pantalla completa.
+- `/camera/<id>`: visor en vivo con audio opcional, recuperación tras reinicios, modo monitor y pantalla completa.
 - `/events`: eventos de movimiento y persona con miniaturas y filtros.
 - `/events/{id}`: detalle del evento, captura original y reproducción histórica vinculada.
 - `/settings/sftp`: servidores SFTP globales reutilizables.
@@ -126,15 +151,17 @@ Bootstrap 5.3.8 y Bootstrap Icons 1.13.1 se cargan desde jsDelivr con versión f
 
 ## Administrar cámaras
 
-El listado de cámaras usa un menú de tres puntos por fila para abrir el visor, consultar eventos, modificar ajustes, redetectar perfiles, iniciar o detener la grabación y eliminar el registro. La página de ajustes permite cambiar nombre, carpeta, IP, usuario, contraseña, URL RTSP, estado, duración, subida SFTP, servidor global asignado y parámetros de detección.
+El listado de cámaras usa un menú de tres puntos por fila para abrir el visor, consultar eventos, modificar ajustes, redetectar perfiles, iniciar o detener la grabación y eliminar el registro. La página de ajustes permite cambiar nombre, carpeta, IP o dominio, usuario, contraseña, URL RTSP, estado, duración, subida SFTP, servidor global asignado y parámetros de detección.
 
 El visor comienza silenciado porque los navegadores bloquean la reproducción automática con sonido. Cuando la cámara ofrece audio compatible, aparece el botón **Activar sonido**; la acción del usuario habilita la pista sin reiniciar el video.
+
+El supervisor del visor consulta `/healthz` de forma independiente. Si el proceso Go se detiene, mantiene la página abierta, muestra el estado desconectado y vuelve a cargar sesión, cámara y WebRTC cuando Fragata inicia otra vez. El botón **Monitor activo** conserva la preferencia y usa Screen Wake Lock cuando el navegador y el contexto seguro lo permiten, evitando que una tablet apague la pantalla mientras funciona como monitor.
 
 Al cambiar IP, usuario, contraseña o URL RTSP, Fragata prueba la nueva configuración antes de guardarla. Una contraseña vacía conserva la credencial cifrada actual. Cambiar la carpeta afecta únicamente a nuevas grabaciones y no mueve los archivos existentes.
 
 ## Detección local de movimiento y personas
 
-La detección es opcional y se configura por cámara desde **Ajustes → Detección**. Fragata intenta obtener automáticamente una URL JPEG mediante ONVIF `GetSnapshotUri`. Cuando una cámara no publica esa capacidad, puede introducirse manualmente una URL HTTP o HTTPS de snapshot perteneciente a la misma IP.
+La detección es opcional y se configura por cámara desde **Ajustes → Detección**. Fragata intenta obtener automáticamente una URL JPEG mediante ONVIF `GetSnapshotUri`. Cuando una cámara no publica esa capacidad, puede introducirse manualmente una URL HTTP o HTTPS de snapshot perteneciente al mismo host configurado.
 
 Flujo de análisis:
 
@@ -176,7 +203,7 @@ La reproducción histórica en navegador utiliza FFmpeg únicamente como adaptad
 
 ## Agregar una cámara
 
-### Detección automática por IP
+### Detección automática por IP o dominio
 
 En el panel introduce:
 
@@ -494,7 +521,7 @@ Las operaciones mutables requieren el encabezado `X-Fragata-CSRF` cuando el logi
 
 ## Seguridad y límites
 
-- De forma predeterminada solo se aceptan IP privadas/locales para cámaras; los hosts devueltos por ONVIF se fijan a la IP introducida para reducir SSRF.
+- De forma predeterminada se aceptan IP privadas, IP públicas y dominios/CNAME. Esta flexibilidad permite cámaras remotas, pero el panel debe protegerse con autenticación, HTTPS y firewall. `FRAGATA_ALLOW_PUBLIC_CAMERAS=false` restaura la restricción privada/local.
 - La búsqueda RTSP está limitada por puertos, número de candidatos, tiempo y paralelismo; no realiza fuerza bruta de credenciales.
 - Las contraseñas de las cámaras no se devuelven por API y se cifran en disco.
 - Al usar FFmpeg externo, la URL RTSP con credenciales se entrega como argumento del proceso; ejecuta Fragata bajo un usuario dedicado y evita que otros usuarios del sistema puedan inspeccionar sus procesos.
@@ -507,7 +534,7 @@ Las operaciones mutables requieren el encabezado `X-Fragata-CSRF` cuando el logi
 - `FRAGATA_MAX_VIEWERS` limita espectadores; internamente se reservan hasta dos sesiones WebRTC por visor, una de video y otra opcional de audio.
 - `FRAGATA_LIVE_IDLE_TIMEOUT` apaga FFmpeg o el substream de vista cuando ya no existen espectadores.
 - El escritor H.265 debe validarse con los modelos reales que se usarán antes de considerarlo producción estable.
-- La URL de snapshot se restringe a HTTP(S) y a la misma IP de la cámara para reducir SSRF; se cifra en el estado local y sus parámetros sensibles se ocultan en la API.
+- La URL de snapshot se restringe a HTTP(S) y al mismo host configurado para la cámara; las URI ONVIF se normalizan hacia ese host, se cifran en el estado local y sus parámetros sensibles se ocultan en la API.
 - Los snapshots se limitan a 8 MiB y 32 megapíxeles antes de decodificarlos para evitar consumo de memoria no acotado.
 - Las miniaturas de eventos se sirven por una ruta autenticada con comprobación de contención para impedir path traversal.
 - El detector humano no carga código nativo ni modelos externos: los pesos HOG/SVM están embebidos en el binario.
@@ -528,14 +555,14 @@ FRAGATA_BIN=./dist/fragata BASE_URL=http://127.0.0.1:8080 ./scripts/smoke-test.s
 
 Prueba real recomendada:
 
-1. Agregar una cámara indicando solo IP y credenciales.
+1. Agregar una cámara indicando IP o dominio y credenciales.
 2. Confirmar estado `en línea`.
 3. Confirmar que el panel muestra la resolución máxima esperada; si es una cámara existente, usar **Redetectar calidad**.
 4. Abrir la página dedicada, probar pantalla completa y revisar si el modo es directo, FFmpeg o substream.
 5. Activar el switch de grabación y esperar el cierre de un segmento MKV.
 6. Abrirlo en VLC o mpv y verificar codec, ancho y alto con `ffprobe`.
-7. Cortar la red de la cámara y confirmar reconexión.
-8. Reiniciar Fragata durante un segmento y revisar recuperación del `.partial`.
+7. Cortar la red de la cámara y confirmar reconexión automática.
+8. Mantener abierto el visor, detener y volver a iniciar Fragata, y confirmar que la reproducción se recupera sin recargar la página; después revisar la recuperación del `.partial`.
 9. Activar el sonido en el visor y confirmar que la pista se escucha cuando la cámara la ofrece.
 10. Revisar con `ffprobe` que el MKV contiene una pista de audio compatible.
 11. Crear dos perfiles SFTP, asignar uno a la cámara y confirmar creación del MKV y `.sha256` remotos.

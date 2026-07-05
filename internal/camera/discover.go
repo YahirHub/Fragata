@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -138,6 +137,7 @@ func Detect(ctx context.Context, cfg config.Config, request AddRequest) (Detecti
 				}
 			}
 			if snapshotURL != "" {
+				snapshotURL = normalizeSnapshotHost(snapshotURL, base.Host)
 				if validated, validateErr := validateSnapshotURL(snapshotURL, base.Host); validateErr == nil {
 					base.SnapshotURL = validated
 				}
@@ -267,7 +267,7 @@ func prepareCamera(cfg config.Config, request AddRequest) (model.Camera, string,
 	if requestedPort == 0 {
 		requestedPort = hostPort
 	}
-	if err := cfg.ValidateCameraIP(host); err != nil {
+	if err := cfg.ValidateCameraHost(host); err != nil {
 		return model.Camera{}, "", 0, err
 	}
 
@@ -354,25 +354,7 @@ func setDirectLiveStream(camera *model.Camera) {
 }
 
 func normalizeHostInput(raw string) (string, int, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", 0, errors.New("introduzca la IP de la cámara o una URL RTSP")
-	}
-	if ip := net.ParseIP(strings.Trim(raw, "[]")); ip != nil {
-		return strings.Trim(raw, "[]"), 0, nil
-	}
-	host, portRaw, err := net.SplitHostPort(raw)
-	if err != nil {
-		return "", 0, errors.New("la cámara debe indicarse mediante una dirección IP; el puerto es opcional")
-	}
-	if net.ParseIP(strings.Trim(host, "[]")) == nil {
-		return "", 0, errors.New("la cámara debe indicarse mediante una dirección IP")
-	}
-	port, err := strconv.Atoi(portRaw)
-	if err != nil || port < 1 || port > 65535 {
-		return "", 0, errors.New("puerto de cámara inválido")
-	}
-	return strings.Trim(host, "[]"), port, nil
+	return config.NormalizeCameraHostInput(raw)
 }
 
 func prependUniquePort(ports []int, port int) []int {

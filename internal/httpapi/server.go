@@ -427,7 +427,7 @@ func (s *Server) diagnoseNetwork(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := s.cfg.ValidateCameraIP(host); err != nil {
+	if err := s.cfg.ValidateCameraHost(host); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -457,7 +457,7 @@ func (s *Server) diagnoseNetwork(w http.ResponseWriter, r *http.Request) {
 func normalizeDiagnosticHost(raw string) (string, int, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return "", 0, errors.New("introduzca la IP o URL RTSP de la cámara")
+		return "", 0, errors.New("introduzca la IP, dominio o URL RTSP de la cámara")
 	}
 	if strings.HasPrefix(strings.ToLower(raw), "rtsp://") || strings.HasPrefix(strings.ToLower(raw), "rtsps://") {
 		parsed, err := url.Parse(raw)
@@ -473,18 +473,7 @@ func normalizeDiagnosticHost(raw string) (string, int, error) {
 		}
 		return parsed.Hostname(), port, nil
 	}
-	if ip := net.ParseIP(strings.Trim(raw, "[]")); ip != nil {
-		return strings.Trim(raw, "[]"), 0, nil
-	}
-	host, portRaw, err := net.SplitHostPort(raw)
-	if err != nil || net.ParseIP(strings.Trim(host, "[]")) == nil {
-		return "", 0, errors.New("la cámara debe indicarse mediante una dirección IP")
-	}
-	port, err := strconv.Atoi(portRaw)
-	if err != nil || port < 1 || port > 65535 {
-		return "", 0, errors.New("puerto de cámara inválido")
-	}
-	return strings.Trim(host, "[]"), port, nil
+	return config.NormalizeCameraHostInput(raw)
 }
 
 func (s *Server) deleteCamera(w http.ResponseWriter, r *http.Request) {

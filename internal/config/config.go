@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -69,8 +70,12 @@ func Load(dotenvPath string) (Config, error) {
 	}
 
 	dataDir := env("FRAGATA_DATA_DIR", "./data")
+	listenAddress, err := resolveListenAddress()
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
-		ListenAddress:        env("FRAGATA_LISTEN", ":8080"),
+		ListenAddress:        listenAddress,
 		DataDir:              dataDir,
 		RecordingsDir:        env("FRAGATA_RECORDINGS_DIR", filepath.Join(dataDir, "recordings")),
 		LogPath:              env("FRAGATA_LOG_PATH", filepath.Join(dataDir, "logs.txt")),
@@ -82,7 +87,7 @@ func Load(dotenvPath string) (Config, error) {
 		AdminUser:            strings.TrimSpace(os.Getenv("FRAGATA_ADMIN_USER")),
 		AdminPassword:        os.Getenv("FRAGATA_ADMIN_PASSWORD"),
 		SecureCookies:        envBool("FRAGATA_SECURE_COOKIES", false),
-		AllowPublicCameras:   envBool("FRAGATA_ALLOW_PUBLIC_CAMERAS", false),
+		AllowPublicCameras:   envBool("FRAGATA_ALLOW_PUBLIC_CAMERAS", true),
 		DiscoveryTimeout:     envDuration("FRAGATA_DISCOVERY_TIMEOUT", 4*time.Second),
 		ProbeTimeout:         envDuration("FRAGATA_PROBE_TIMEOUT", 6*time.Second),
 		RTSPConnectTimeout:   envDuration("FRAGATA_RTSP_CONNECT_TIMEOUT", 3*time.Second),
@@ -178,23 +183,141 @@ func resolveExecutable(configured, fallback string) (string, error) {
 
 func (c Config) AuthEnabled() bool { return c.AdminUser != "" && c.AdminPassword != "" }
 
-func (c Config) ValidateCameraIP(host string) error {
-	name := host
-	if h, _, err := net.SplitHostPort(host); err == nil {
+func NormalizeCameraHostInput(raw string) (string, int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", 0, errors.New("introduzca la IP o el dominio de la cámara")
+	}
+	if ip := net.ParseIP(strings.Trim(raw, "[]")); ip != nil {
+		return ip.String(), 0, nil
+	}
+	host, portRaw, err := net.SplitHostPort(raw)
+	if err == nil {
+		host = strings.Trim(strings.TrimSpace(host), "[]")
+		if host == "" {
+			return "", 0, errors.New("host de cámara vacío")
+		}
+		if net.ParseIP(host) == nil && !validHostname(host) {
+			return "", 0, errors.New("el host de la cámara no es una IP ni un dominio válido")
+		}
+		port, convErr := strconv.Atoi(portRaw)
+		if convErr != nil || port < 1 || port > 65535 {
+			return "", 0, errors.New("puerto de cámara inválido")
+		}
+		return strings.ToLower(strings.TrimSuffix(host, ".")), port, nil
+	}
+	if strings.Contains(raw, ":") {
+		return "", 0, errors.New("host o puerto de cámara inválido")
+	}
+	host = strings.TrimSuffix(raw, ".")
+	if !validHostname(host) {
+		return "", 0, errors.New("el host de la cámara no es una IP ni un dominio válido")
+	}
+	return strings.ToLower(host), 0, nil
+}
+
+func (c Config) ValidateCameraHost(host string) error {
+	name := strings.TrimSpace(host)
+	if h, _, err := net.SplitHostPort(name); err == nil {
 		name = h
 	}
-	ip := net.ParseIP(strings.Trim(name, "[]"))
-	if ip == nil {
-		return errors.New("la cámara debe indicarse mediante una dirección IP")
+	name = strings.Trim(strings.TrimSpace(name), "[]")
+	if name == "" {
+		return errors.New("introduzca la IP o el dominio de la cámara")
 	}
-	if !c.AllowPublicCameras && !isPrivateOrLocal(ip) {
-		return errors.New("por seguridad solo se permiten IP privadas; habilite FRAGATA_ALLOW_PUBLIC_CAMERAS para cambiarlo")
+	if ip := net.ParseIP(name); ip != nil {
+		if ip.IsUnspecified() || ip.IsMulticast() {
+			return errors.New("la dirección de la cámara no puede ser indefinida ni multicast")
+		}
+		if !c.AllowPublicCameras && !isPrivateOrLocal(ip) {
+			return errors.New("por seguridad solo se permiten IP privadas; habilite FRAGATA_ALLOW_PUBLIC_CAMERAS para admitir cámaras externas")
+		}
+		return nil
+	}
+	if !validHostname(name) {
+		return errors.New("el host de la cámara no es una IP ni un dominio válido")
+	}
+	if c.AllowPublicCameras {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, name)
+	if err != nil || len(addresses) == 0 {
+		return errors.New("no se pudo resolver el dominio de la cámara dentro de la red privada")
+	}
+	for _, address := range addresses {
+		if !isPrivateOrLocal(address.IP) {
+			return errors.New("el dominio de la cámara resuelve a una IP pública; habilite FRAGATA_ALLOW_PUBLIC_CAMERAS para admitir cámaras externas")
+		}
 	}
 	return nil
 }
 
+// ValidateCameraIP se conserva como alias para integraciones antiguas.
+func (c Config) ValidateCameraIP(host string) error { return c.ValidateCameraHost(host) }
+
+func validHostname(host string) bool {
+	if len(host) > 253 {
+		return false
+	}
+	host = strings.TrimSuffix(host, ".")
+	if host == "" {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) < 1 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, character := range label {
+			if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || character == '-' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
+}
+
 func isPrivateOrLocal(ip net.IP) bool {
 	return ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast()
+}
+
+func resolveListenAddress() (string, error) {
+	if raw := strings.TrimSpace(os.Getenv("FRAGATA_LISTEN")); raw != "" {
+		return validateListenAddress(raw)
+	}
+	host := strings.TrimSpace(env("FRAGATA_LISTEN_HOST", "0.0.0.0"))
+	port := envInt("FRAGATA_LISTEN_PORT", 8080)
+	if port < 1 || port > 65535 {
+		return "", errors.New("FRAGATA_LISTEN_PORT debe estar entre 1 y 65535")
+	}
+	if host == "" || host == "*" {
+		host = "0.0.0.0"
+	}
+	return validateListenAddress(net.JoinHostPort(strings.Trim(host, "[]"), strconv.Itoa(port)))
+}
+
+func validateListenAddress(address string) (string, error) {
+	address = strings.TrimSpace(address)
+	if !strings.Contains(address, ":") {
+		return "", errors.New("FRAGATA_LISTEN debe incluir host y puerto, por ejemplo 0.0.0.0:8080")
+	}
+	host, portRaw, err := net.SplitHostPort(address)
+	if err != nil {
+		return "", fmt.Errorf("FRAGATA_LISTEN inválido: %w", err)
+	}
+	port, err := strconv.Atoi(portRaw)
+	if err != nil || port < 1 || port > 65535 {
+		return "", errors.New("el puerto de FRAGATA_LISTEN debe estar entre 1 y 65535")
+	}
+	if host != "" && host != "*" && net.ParseIP(strings.Trim(host, "[]")) == nil && !validHostname(host) {
+		return "", errors.New("el host de FRAGATA_LISTEN no es válido")
+	}
+	if host == "*" {
+		host = "0.0.0.0"
+	}
+	return net.JoinHostPort(strings.Trim(host, "[]"), strconv.Itoa(port)), nil
 }
 
 func loadDotEnv(path string) error {

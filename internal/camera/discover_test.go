@@ -59,3 +59,22 @@ func TestPreferredDimensionsUsesStreamSPS(t *testing.T) {
 		t.Fatalf("got %dx%d", width, height)
 	}
 }
+
+func TestPrepareCameraAcceptsDomainAndPublicIP(t *testing.T) {
+	cfg := config.Config{AllowPublicCameras: true}
+	camera, _, port, err := prepareCamera(cfg, AddRequest{Host: "camera.example.com:8554"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if camera.Host != "camera.example.com" || port != 8554 {
+		t.Fatalf("unexpected camera: %#v port=%d", camera, port)
+	}
+
+	camera, _, _, err = prepareCamera(cfg, AddRequest{Host: "203.0.113.25"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if camera.Host != "203.0.113.25" {
+		t.Fatalf("unexpected public host: %q", camera.Host)
+	}
+}

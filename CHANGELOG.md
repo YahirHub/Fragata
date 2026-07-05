@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.8.3 - 2026-07-05
+
+- Permite agregar cámaras mediante IP privada, IP pública, IPv4, IPv6 o dominio/CNAME con puerto opcional.
+- Activa cámaras externas por defecto y conserva `FRAGATA_ALLOW_PUBLIC_CAMERAS=false` como modo restringido.
+- Añade `FRAGATA_LISTEN_HOST` y `FRAGATA_LISTEN_PORT`, con `0.0.0.0:8080` como escucha predeterminada y compatibilidad con `FRAGATA_LISTEN`.
+- Normaliza las URL de snapshot ONVIF hacia el dominio o host configurado para la cámara.
+- Agrega un supervisor de `/healthz` al visor que detecta la caída y el regreso del proceso Go.
+- Reconstruye automáticamente sesión, metadatos y WebRTC después de reiniciar Fragata sin recargar la página.
+- Añade timeouts explícitos a las solicitudes del visor para evitar conexiones detenidas indefinidamente.
+- Incorpora un modo monitor persistente para tablets mediante Screen Wake Lock cuando el navegador lo permite.
+- Actualiza formularios, Docker Compose, documentación y pruebas para hosts externos y escucha configurable.
+
 ## 0.8.2 - 2026-07-05
 
 - Añade un control unificado para ocultar o mostrar el sidebar en escritorio y abrir el drawer de navegación en teléfonos y tablets.

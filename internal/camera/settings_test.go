@@ -43,3 +43,13 @@ func TestValidateSnapshotURLRequiresCameraHost(t *testing.T) {
 		t.Fatal("expected foreign host rejection")
 	}
 }
+
+func TestNormalizeSnapshotHostUsesConfiguredDomain(t *testing.T) {
+	got := normalizeSnapshotHost("http://192.168.1.20:8080/snapshot.jpg", "camera.example.com")
+	if got != "http://camera.example.com:8080/snapshot.jpg" {
+		t.Fatalf("got %q", got)
+	}
+	if _, err := validateSnapshotURL(got, "camera.example.com"); err != nil {
+		t.Fatal(err)
+	}
+}
