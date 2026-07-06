@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.0 - 2026-07-05
+
+- Añade el apartado **Grabaciones** con filtro por cámara y día, días disponibles, resumen de espacio y duración, lista cronológica y línea de tiempo diaria de 24 horas.
+- Permite reproducir cualquier segmento MKV desde un segundo específico y saltar desde marcadores de movimiento o persona sin modificar el archivo original.
+- Agrega descarga protegida del MKV, soporte para carpetas de cámaras eliminadas y validación reforzada contra path traversal y enlaces simbólicos.
+- Detecta el códec real de cada archivo histórico con FFprobe y solo conserva H.264 cuando es compatible; H.265 u otros formatos se convierten a H.264 para el navegador.
+- Limita las transcodificaciones simultáneas mediante `FRAGATA_MAX_TRANSCODES` y responde `429` con `Retry-After` al alcanzar el límite.
+- Sustituye el límite básico de login por rate limit por IP y pareja IP/usuario, ventana y bloqueo configurables, limpieza de buckets y soporte seguro para proxies locales sin bloqueo global de cuenta.
+- Exige contraseñas administrativas de al menos 12 caracteres, compara credenciales mediante hashes de tamaño uniforme y endurece cabeceras HTTP/CSP.
+- Corrige la cola SFTP para no retirar un trabajo hasta que la eliminación local solicitada haya terminado correctamente.
+- Cambia la imagen final a Alpine con FFmpeg/FFprobe, usuario no privilegiado y soporte real de reproducción histórica dentro de Docker.
+- Endurece Docker Compose con autenticación obligatoria, bind mounts separados para estado, grabaciones y configuración de solo lectura, raíz de solo lectura, `no-new-privileges`, capabilities eliminadas, `tmpfs` y límite de procesos.
+- Corrige la confirmación de movimiento consecutivo y protege los recursos CDN mediante SRI.
+
 ## 0.8.3 - 2026-07-05
 
 - Permite agregar cámaras mediante IP privada, IP pública, IPv4, IPv6 o dominio/CNAME con puerto opcional.

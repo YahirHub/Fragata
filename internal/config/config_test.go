@@ -17,7 +17,7 @@ func TestOptionalAuthentication(t *testing.T) {
 		t.Fatal("la autenticación debe permanecer deshabilitada con credenciales incompletas")
 	}
 
-	t.Setenv("FRAGATA_ADMIN_PASSWORD", "secret")
+	t.Setenv("FRAGATA_ADMIN_PASSWORD", "secret-password")
 	cfg, err = Load("")
 	if err != nil {
 		t.Fatal(err)

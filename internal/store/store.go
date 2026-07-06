@@ -381,6 +381,29 @@ func (s *Store) DetectionEvents(cameraID string, limit int) []model.DetectionEve
 	return out
 }
 
+func (s *Store) DetectionEventsBetween(cameraID string, start, end time.Time, limit int) []model.DetectionEvent {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if limit < 1 || limit > 5000 {
+		limit = 5000
+	}
+	out := make([]model.DetectionEvent, 0)
+	for _, event := range s.data.Events {
+		if cameraID != "" && event.CameraID != cameraID {
+			continue
+		}
+		if event.CreatedAt.Before(start) || !event.CreatedAt.Before(end) {
+			continue
+		}
+		out = append(out, event)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
 func (s *Store) DetectionEvent(id string) (model.DetectionEvent, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

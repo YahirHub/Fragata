@@ -8,16 +8,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"fragata/internal/auth"
@@ -38,19 +37,24 @@ import (
 var staticFiles embed.FS
 
 type Server struct {
-	cfg      config.Config
-	auth     *auth.Manager
-	cameras  *camera.Manager
-	live     *live.Manager
-	uploader *upload.Uploader
-	store    *store.Store
-	logger   *slog.Logger
-	limiter  *loginLimiter
-	http     *http.Server
+	cfg        config.Config
+	auth       *auth.Manager
+	cameras    *camera.Manager
+	live       *live.Manager
+	uploader   *upload.Uploader
+	store      *store.Store
+	logger     *slog.Logger
+	limiter    *loginLimiter
+	transcodes chan struct{}
+	http       *http.Server
 }
 
 func New(cfg config.Config, authManager *auth.Manager, cameras *camera.Manager, liveManager *live.Manager, uploader *upload.Uploader, state *store.Store, logger *slog.Logger) (*Server, error) {
-	s := &Server{cfg: cfg, auth: authManager, cameras: cameras, live: liveManager, uploader: uploader, store: state, logger: logger, limiter: newLoginLimiter()}
+	maxTranscodes := cfg.MaxTranscodes
+	if maxTranscodes < 1 {
+		maxTranscodes = 2
+	}
+	s := &Server{cfg: cfg, auth: authManager, cameras: cameras, live: liveManager, uploader: uploader, store: state, logger: logger, limiter: newLoginLimiter(cfg.LoginMaxAttempts, cfg.LoginWindow, cfg.LoginBlockDuration), transcodes: make(chan struct{}, maxTranscodes)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /login", s.loginPage)
@@ -64,6 +68,7 @@ func New(cfg config.Config, authManager *auth.Manager, cameras *camera.Manager, 
 	protected.HandleFunc("GET /camera/{id}", s.cameraPage)
 	protected.HandleFunc("GET /events", s.eventsPage)
 	protected.HandleFunc("GET /events/{id}", s.eventPage)
+	protected.HandleFunc("GET /recordings", s.recordingsPage)
 	protected.HandleFunc("GET /settings/sftp", s.sftpSettingsPage)
 	protected.HandleFunc("GET /settings/storage", s.storageSettingsPage)
 	protected.HandleFunc("GET /api/session", s.session)
@@ -84,6 +89,11 @@ func New(cfg config.Config, authManager *auth.Manager, cameras *camera.Manager, 
 	protected.HandleFunc("GET /api/events/{id}/snapshot", s.detectionEventSnapshot)
 	protected.HandleFunc("GET /api/events/{id}/video", s.detectionEventVideo)
 	protected.HandleFunc("GET /api/events/{id}/recording", s.detectionEventRecording)
+	protected.HandleFunc("GET /api/recordings", s.listRecordings)
+	protected.HandleFunc("GET /api/recordings/sources", s.listRecordingSources)
+	protected.HandleFunc("GET /api/recordings/days", s.listRecordingDays)
+	protected.HandleFunc("GET /api/recordings/{id}/video", s.recordingVideo)
+	protected.HandleFunc("GET /api/recordings/{id}/file", s.recordingFile)
 	protected.HandleFunc("GET /api/uploads", s.uploads)
 	protected.HandleFunc("GET /api/sftp-profiles", s.listSFTPProfiles)
 	protected.HandleFunc("POST /api/sftp-profiles", s.createSFTPProfile)
@@ -108,7 +118,7 @@ func New(cfg config.Config, authManager *auth.Manager, cameras *camera.Manager, 
 	mux.Handle("/", s.auth.Require(protected))
 
 	s.http = &http.Server{
-		Addr: cfg.ListenAddress, Handler: securityHeaders(mux),
+		Addr: cfg.ListenAddress, Handler: securityHeaders(mux, cfg.SecureCookies),
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 180 * time.Second, WriteTimeout: 180 * time.Second, IdleTimeout: 90 * time.Second,
 	}
 	return s, nil
@@ -206,24 +216,51 @@ func (s *Server) serveAsset(w http.ResponseWriter, name, contentType string) {
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
-	ip := remoteIP(r)
-	if !s.limiter.Allow(ip) {
-		writeError(w, http.StatusTooManyRequests, "demasiados intentos; espere un minuto")
+	w.Header().Set("Cache-Control", "no-store")
+	var request struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := decodeJSONWithLimit(w, r, &request, 8<<10); err != nil {
 		return
 	}
-	var request struct{ Username, Password string }
-	if err := decodeJSON(w, r, &request); err != nil {
+	request.Username = strings.TrimSpace(request.Username)
+	ip := remoteIP(r)
+	if allowed, retryAfter := s.limiter.Allow(ip, request.Username); !allowed {
+		setRetryAfter(w, retryAfter)
+		writeError(w, http.StatusTooManyRequests, "acceso temporalmente bloqueado por demasiados intentos")
+		return
+	}
+	if len(request.Username) > 128 || len(request.Password) > 1024 {
+		s.loginFailed(w, ip, request.Username)
 		return
 	}
 	sess, err := s.auth.Login(w, request.Username, request.Password)
 	if err != nil {
-		s.limiter.Fail(ip)
-		time.Sleep(300 * time.Millisecond)
-		writeError(w, http.StatusUnauthorized, "usuario o contraseña incorrectos")
+		s.loginFailed(w, ip, request.Username)
 		return
 	}
-	s.limiter.Success(ip)
+	s.limiter.Success(ip, request.Username)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "csrf_token": sess.CSRFToken})
+}
+
+func (s *Server) loginFailed(w http.ResponseWriter, ip, username string) {
+	retryAfter := s.limiter.Fail(ip, username)
+	time.Sleep(350 * time.Millisecond)
+	if retryAfter > 0 {
+		setRetryAfter(w, retryAfter)
+		writeError(w, http.StatusTooManyRequests, "acceso temporalmente bloqueado por demasiados intentos")
+		return
+	}
+	writeError(w, http.StatusUnauthorized, "usuario o contraseña incorrectos")
+}
+
+func setRetryAfter(w http.ResponseWriter, duration time.Duration) {
+	seconds := int((duration + time.Second - 1) / time.Second)
+	if seconds < 1 {
+		seconds = 1
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(seconds))
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
@@ -866,11 +903,26 @@ func (s *Server) requireCSRF(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, target any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	return decodeJSONWithLimit(w, r, target, 1<<20)
+}
+
+func decodeJSONWithLimit(w http.ResponseWriter, r *http.Request, target any, limit int64) error {
+	contentType := strings.ToLower(strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]))
+	if contentType != "application/json" {
+		err := errors.New("Content-Type debe ser application/json")
+		writeError(w, http.StatusUnsupportedMediaType, err.Error())
+		return err
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		writeError(w, http.StatusBadRequest, "JSON inválido: "+err.Error())
+		return err
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		err := errors.New("JSON inválido: se recibió contenido adicional")
+		writeError(w, http.StatusBadRequest, err.Error())
 		return err
 	}
 	return nil
@@ -886,54 +938,21 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
 
-func securityHeaders(next http.Handler) http.Handler {
+func securityHeaders(next http.Handler, secureTransport bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' https://cdn.jsdelivr.net; style-src-attr 'unsafe-inline'; font-src 'self' https://cdn.jsdelivr.net data:; img-src 'self' data:; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
+		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' https://cdn.jsdelivr.net; style-src-attr 'unsafe-inline'; font-src 'self' https://cdn.jsdelivr.net data:; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; worker-src 'self' blob:")
+		if secureTransport {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/login" {
+			w.Header().Set("Cache-Control", "no-store")
+		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-func remoteIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil {
-		return host
-	}
-	return r.RemoteAddr
-}
-
-type loginLimiter struct {
-	mu       sync.Mutex
-	attempts map[string][]time.Time
-}
-
-func newLoginLimiter() *loginLimiter { return &loginLimiter{attempts: make(map[string][]time.Time)} }
-
-func (l *loginLimiter) Allow(ip string) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	cutoff := time.Now().Add(-time.Minute)
-	items := l.attempts[ip][:0]
-	for _, at := range l.attempts[ip] {
-		if at.After(cutoff) {
-			items = append(items, at)
-		}
-	}
-	l.attempts[ip] = items
-	return len(items) < 5
-}
-
-func (l *loginLimiter) Fail(ip string) {
-	l.mu.Lock()
-	l.attempts[ip] = append(l.attempts[ip], time.Now())
-	l.mu.Unlock()
-}
-
-func (l *loginLimiter) Success(ip string) {
-	l.mu.Lock()
-	delete(l.attempts, ip)
-	l.mu.Unlock()
 }

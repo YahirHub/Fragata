@@ -2,7 +2,7 @@
 
 Fragata es un servidor de cámaras IP escrito en Go. Detecta dispositivos ONVIF, elige el stream RTSP de mayor resolución para grabarlo sin recomprimir, guarda video H.264/H.265 y audio compatible en segmentos MKV, ofrece vista en vivo mediante WebRTC, puede subir grabaciones terminadas por SFTP y detecta movimiento y personas localmente mediante snapshots.
 
-El núcleo sigue siendo un único binario compilable con `CGO_ENABLED=0` y frontend embebido. La detección utiliza código Go puro y pesos HOG/SVM embebidos: no requiere Python, OpenCV, ONNX Runtime, archivos de modelo ni servicios externos. FFmpeg es totalmente opcional y solo se usa para normalizar la vista H.264 o convertir AAC cuando el navegador lo necesita. El archivo MKV conserva siempre el video y audio originales de la cámara.
+El núcleo sigue siendo un único binario compilable con `CGO_ENABLED=0` y frontend embebido. La detección utiliza código Go puro y pesos HOG/SVM embebidos: no requiere Python, OpenCV, ONNX Runtime, archivos de modelo ni servicios externos. FFmpeg sigue siendo opcional para el binario nativo, pero habilita la normalización de video, la conversión de audio y la reproducción histórica compatible con navegadores. El archivo MKV conserva siempre el video y audio originales de la cámara.
 
 ## Estado del MVP
 
@@ -31,7 +31,7 @@ Incluido:
 - Retención global configurable en días, meses o años, con protección de grabaciones abiertas y archivos pendientes de subir.
 - Registro local rotativo en `logs.txt`, limitado a 1 MiB mediante eliminación de las líneas más antiguas.
 - Login opcional definido en `.env`.
-- Sesiones persistentes, CSRF, cookies `HttpOnly` y límite básico de intentos de acceso.
+- Sesiones persistentes, CSRF, cookies `HttpOnly` y rate limit de login por IP y por pareja IP/usuario con bloqueo temporal configurable.
 - Credenciales de cámaras cifradas con AES-256-GCM dentro del estado local.
 - Panel web profesional y responsivo con dashboard, CRUD de cámaras, alta y ajustes en páginas independientes, sidebar, visor dedicado, Bootstrap e iconos por CDN.
 - Layout de autenticación independiente, dropdown de usuario y modo Invitado cuando el login está deshabilitado.
@@ -44,13 +44,14 @@ Incluido:
 - Confirmación humana beta mediante HOG/SVM embebido, ejecutada solo después de detectar movimiento para reducir consumo.
 - Configuración por cámara de sensibilidad, intervalo, confianza humana, enfriamiento y zona rectangular de análisis.
 - Página de eventos con miniaturas originales, filtros por cámara y tipo, vínculo al segmento MKV y reproducción desde el instante detectado.
+- Videoteca local con filtro por cámara y día, días disponibles, lista cronológica, descarga del MKV original y línea de tiempo diaria con marcadores de eventos.
+- Reproducción histórica desde cualquier segundo del segmento, detección del códec real mediante FFprobe y límite global de transcodificaciones.
 
 No incluido todavía:
 
 - Transcodificación general de codecs de audio distintos de G.711, Opus y AAC.
 - Entrada mediante protocolo SRT. Las cámaras ONVIF normalmente entregan la transmisión por RTSP; SRT se añadirá como transporte independiente.
 - Clasificación avanzada de mascotas, vehículos, rostros o personas pequeñas/ocultas mediante redes neuronales.
-- Línea de tiempo global y navegación histórica continua entre segmentos desde el panel.
 
 ## Requisitos
 
@@ -58,7 +59,7 @@ No incluido todavía:
 - Acceso inicial a internet para ejecutar `go mod tidy` y generar `go.sum`.
 - El navegador que abre el panel debe poder acceder a `cdn.jsdelivr.net` para cargar Bootstrap y Bootstrap Icons. El servidor Fragata no descarga esos archivos.
 - Una cámara con RTSP H.264 o H.265.
-- Para visualizar el stream H.265 principal manteniendo su resolución, una instalación de FFmpeg con el encoder `libx264`. Sin FFmpeg, Fragata intenta usar un substream H.264 de la cámara.
+- Para visualizar H.265 y reproducir grabaciones desde el navegador, una instalación de FFmpeg/FFprobe con el encoder `libx264`. La imagen Docker oficial del proyecto ya los incluye.
 - Acceso a la misma red local para WS-Discovery. La alta manual también admite cámaras remotas mediante IP pública o dominio cuando sus puertos son alcanzables.
 
 ## Inicio rápido
@@ -113,7 +114,7 @@ FRAGATA_ADMIN_USER=admin
 FRAGATA_ADMIN_PASSWORD=una-contraseña-larga
 ```
 
-Las sesiones continúan siendo válidas después de reiniciar Fragata hasta que vencen. El navegador conserva el token aleatorio y Fragata guarda únicamente su hash SHA-256 en el archivo de estado. Si cualquiera de los dos valores queda vacío, la autenticación se deshabilita y el panel se abre directamente.
+La contraseña debe tener al menos 12 caracteres. Las sesiones continúan siendo válidas después de reiniciar Fragata hasta que vencen. El navegador conserva el token aleatorio y Fragata guarda únicamente su hash SHA-256 en el archivo de estado. El rate limit bloquea la IP y la pareja IP/usuario después de varios intentos fallidos y devuelve `Retry-After`; sus valores se ajustan con `FRAGATA_LOGIN_MAX_ATTEMPTS`, `FRAGATA_LOGIN_WINDOW` y `FRAGATA_LOGIN_BLOCK_DURATION`. Si cualquiera de los dos valores queda vacío, la autenticación se deshabilita para ejecución nativa, pero Docker Compose exige ambos valores.
 
 Cuando Fragata esté detrás de HTTPS:
 
@@ -138,6 +139,7 @@ La administración está separada en rutas claras:
 - `/camera/<id>`: visor en vivo con audio opcional, recuperación tras reinicios, modo monitor y pantalla completa.
 - `/events`: eventos de movimiento y persona con miniaturas y filtros.
 - `/events/{id}`: detalle del evento, captura original y reproducción histórica vinculada.
+- `/recordings`: videos locales por cámara y día, reproductor y línea de tiempo de 24 horas.
 - `/settings/sftp`: servidores SFTP globales reutilizables.
 - `/settings/storage`: política de retención y estado del registro local.
 
@@ -320,6 +322,10 @@ Las cámaras ya guardadas antes de esta versión pueden conservar la URL antigua
 
 ## Grabaciones MKV
 
+La ruta `/recordings` consulta directamente el almacenamiento local y permite filtrar por cámara y día. Los segmentos se ordenan por fecha y hora, se muestran en una línea de tiempo de 24 horas y los eventos aparecen como marcadores. Al pulsar un segmento o evento, el navegador solicita MP4 fragmentado desde el segundo seleccionado; el MKV original permanece intacto y puede descargarse.
+
+`FRAGATA_MAX_TRANSCODES` limita las reproducciones históricas simultáneas. Cuando todas las plazas están ocupadas la API responde `429` con `Retry-After`, evitando que varias pestañas agoten CPU y memoria. FFprobe identifica el códec del archivo histórico en lugar de asumir el códec actual de la cámara.
+
 Estructura:
 
 ```text
@@ -435,14 +441,30 @@ Fragata escribe eventos tanto en la salida estándar como en `FRAGATA_LOG_PATH`.
 
 ## Docker Compose
 
-En servidores Linux, `docker-compose.yml` usa `network_mode: host`. Fragata comparte la red del host para alcanzar cámaras LAN y recibir WS-Discovery multicast. No se declara `ports:` porque el servicio escucha directamente en el puerto `8080` del host.
+En servidores Linux, `docker-compose.yml` usa `network_mode: host`. Fragata comparte la red del host para alcanzar cámaras LAN y recibir WS-Discovery multicast. No se declara `ports:` porque el servicio escucha directamente en el puerto configurado del host.
+
+El Compose de producción exige usuario y contraseña, ejecuta con el UID/GID indicado, elimina todas las capabilities, activa `no-new-privileges`, usa raíz de solo lectura y limita procesos. La imagen final Alpine incluye FFmpeg y FFprobe. Solo quedan escribibles `/data`, `/recordings` y un `/tmp` temporal sin ejecución.
+
+Prepara las carpetas visibles en el host con el mismo UID/GID definido en `.env`:
 
 ```bash
 cp .env.example .env
+# Edita .env y define una contraseña de al menos 12 caracteres.
+mkdir -p data recordings
+sudo chown -R "$(id -u):$(id -g)" data recordings
 docker compose build
 docker compose up -d
 docker compose logs -f fragata
 ```
+
+Montajes predeterminados:
+
+```text
+./data       -> /data        state.json, secret.key, logs.txt y eventos
+./recordings -> /recordings  segmentos MKV visibles y respaldables desde Linux
+```
+
+Las rutas pueden cambiarse con `FRAGATA_HOST_DATA_DIR` y `FRAGATA_HOST_RECORDINGS_DIR`. Compose exige que ambas carpetas ya existan para evitar que Docker las cree como `root`. `./config` se monta como solo lectura en `/etc/fragata/config`; un diccionario personalizado debe usar, por ejemplo, `FRAGATA_RTSP_DICTIONARY=/etc/fragata/config/rtsp-paths.txt`. Para una llave SFTP, monta una carpeta de secretos como solo lectura y apunta `FRAGATA_SFTP_PRIVATE_KEY` al archivo dentro de `/run/secrets/fragata`.
 
 Después abre:
 
@@ -450,13 +472,13 @@ Después abre:
 http://IP_DEL_SERVIDOR:8080
 ```
 
-Si el entorno no admite red del host, usa el archivo bridge:
+Si el entorno no admite red del host, usa:
 
 ```bash
 docker compose -f docker-compose.bridge.yml up -d --build
 ```
 
-Con bridge, el acceso manual por IP puede funcionar si el firewall permite forwarding, pero el descubrimiento multicast ONVIF puede no atravesar esa red. El contenedor final usa `scratch`, ejecuta con UID/GID `65532` y persiste `/data` en un volumen. La imagen `scratch` no contiene FFmpeg; allí Fragata utiliza WebRTC directo o el substream H.264. Para transcodificación H.265 debe ejecutarse el binario en un host que tenga FFmpeg o construirse una imagen derivada que lo incluya.
+Con bridge, el acceso manual por IP puede funcionar si el firewall permite forwarding, pero el descubrimiento multicast ONVIF puede no atravesar esa red.
 
 ## Servicio systemd
 
@@ -510,6 +532,11 @@ journalctl -u fragata -f
 | `GET` | `/api/events/{id}/snapshot` | Servir de forma protegida la miniatura de un evento |
 | `GET` | `/api/events/{id}/video` | Reproducir el segmento desde el instante del evento mediante MP4 fragmentado |
 | `GET` | `/api/events/{id}/recording` | Descargar o abrir el MKV original relacionado |
+| `GET` | `/api/recordings` | Listar videos por cámara y día con metadatos y eventos |
+| `GET` | `/api/recordings/sources` | Listar cámaras y carpetas archivadas con grabaciones |
+| `GET` | `/api/recordings/days` | Consultar días disponibles, cantidad y tamaño |
+| `GET` | `/api/recordings/{id}/video` | Reproducir desde un segundo mediante MP4 fragmentado |
+| `GET` | `/api/recordings/{id}/file` | Descargar el MKV original |
 | `GET` | `/api/uploads` | Cola SFTP |
 | `GET/POST` | `/api/sftp-profiles` | Listar o crear perfiles SFTP globales |
 | `PATCH/DELETE` | `/api/sftp-profiles/{id}` | Modificar o eliminar un perfil global |
@@ -520,6 +547,8 @@ journalctl -u fragata -f
 Las operaciones mutables requieren el encabezado `X-Fragata-CSRF` cuando el login está habilitado.
 
 ## Seguridad y límites
+
+Antes de publicar el panel, complete la lista de [`SECURITY.md`](SECURITY.md).
 
 - De forma predeterminada se aceptan IP privadas, IP públicas y dominios/CNAME. Esta flexibilidad permite cámaras remotas, pero el panel debe protegerse con autenticación, HTTPS y firewall. `FRAGATA_ALLOW_PUBLIC_CAMERAS=false` restaura la restricción privada/local.
 - La búsqueda RTSP está limitada por puertos, número de candidatos, tiempo y paralelismo; no realiza fuerza bruta de credenciales.
@@ -532,6 +561,8 @@ Las operaciones mutables requieren el encabezado `X-Fragata-CSRF` cuando el logi
 - El audio PCMA, PCMU y Opus se reproduce directamente; AAC se conserva en MKV y puede convertirse de forma opcional para el navegador mediante FFmpeg sin afectar el video.
 - Los clusters MKV se descargan al archivo aproximadamente cada 5 segundos para limitar memoria y pérdida ante cortes.
 - `FRAGATA_MAX_VIEWERS` limita espectadores; internamente se reservan hasta dos sesiones WebRTC por visor, una de video y otra opcional de audio.
+- `FRAGATA_MAX_TRANSCODES` limita procesos FFmpeg de reproducción histórica y devuelve `429` cuando el servidor está ocupado.
+- Los identificadores de grabación codifican rutas relativas; el servidor valida contención, extensión, estructura y rechaza enlaces simbólicos antes de abrir un archivo.
 - `FRAGATA_LIVE_IDLE_TIMEOUT` apaga FFmpeg o el substream de vista cuando ya no existen espectadores.
 - El escritor H.265 debe validarse con los modelos reales que se usarán antes de considerarlo producción estable.
 - La URL de snapshot se restringe a HTTP(S) y al mismo host configurado para la cámara; las URI ONVIF se normalizan hacia ese host, se cifran en el estado local y sus parámetros sensibles se ocultan en la API.
@@ -592,3 +623,4 @@ internal/transcode/   FFmpeg opcional y reconstrucción RTP/H.264 para WebRTC
 internal/upload/      cola y transferencia SFTP
 contexto/             decisiones técnicas persistentes
 ```
+

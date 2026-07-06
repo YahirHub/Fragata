@@ -30,7 +30,13 @@ func (m *Manager) Login(w http.ResponseWriter, username, password string) (model
 	if !m.Enabled() {
 		return model.Session{}, errors.New("autenticación deshabilitada")
 	}
-	if subtle.ConstantTimeCompare([]byte(username), []byte(m.cfg.AdminUser)) != 1 || subtle.ConstantTimeCompare([]byte(password), []byte(m.cfg.AdminPassword)) != 1 {
+	providedUser := sha256.Sum256([]byte(username))
+	expectedUser := sha256.Sum256([]byte(m.cfg.AdminUser))
+	providedPassword := sha256.Sum256([]byte(password))
+	expectedPassword := sha256.Sum256([]byte(m.cfg.AdminPassword))
+	userOK := subtle.ConstantTimeCompare(providedUser[:], expectedUser[:])
+	passwordOK := subtle.ConstantTimeCompare(providedPassword[:], expectedPassword[:])
+	if userOK&passwordOK != 1 {
 		return model.Session{}, errors.New("credenciales inválidas")
 	}
 	token, err := randomToken(32)

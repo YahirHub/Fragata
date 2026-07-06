@@ -115,11 +115,16 @@ func (d *MotionDetector) Analyze(source image.Image, zone image.Rectangle, sensi
 		d.streak++
 	} else {
 		d.streak = 0
+		copy(d.previous, current)
 	}
-	copy(d.previous, current)
+	// Keep the stable background while confirming a candidate. Comparing the
+	// next frame only against the immediately previous frame would miss a slow
+	// object whose second displacement changes just its narrow edges.
 	if d.streak < 2 || maxX < minX || maxY < minY {
 		return MotionResult{Score: score}
 	}
+	copy(d.previous, current)
+	d.streak = 0
 
 	bounds := image.Rect(
 		zone.Min.X+minX*zone.Dx()/motionWidth,

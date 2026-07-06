@@ -265,15 +265,15 @@ func remoteMatches(client *sftp.Client, job model.UploadJob) bool {
 }
 
 func (u *Uploader) complete(job model.UploadJob, deleteLocal bool) error {
-	if err := u.store.DeleteUploadJob(job.ID); err != nil {
-		return err
-	}
+	// Keep the queue entry until local cleanup succeeds. If deletion fails due
+	// to permissions or a transient filesystem error, the next worker pass
+	// verifies the already uploaded remote file and retries the cleanup.
 	if deleteLocal {
 		if err := os.Remove(job.LocalPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
+			return fmt.Errorf("eliminar grabación local confirmada en SFTP: %w", err)
 		}
 	}
-	return nil
+	return u.store.DeleteUploadJob(job.ID)
 }
 
 func (u *Uploader) profileConfig(id string) (config.SFTPConfig, bool) {

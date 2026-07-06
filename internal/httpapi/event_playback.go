@@ -4,11 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -131,78 +129,11 @@ func (s *Server) detectionEventVideo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "la grabación todavía no está disponible")
 		return
 	}
-	probeFile, info, err := openRegularRecording(resolved.absolute)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			http.NotFound(w, r)
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "no se pudo abrir la grabación")
-		return
-	}
-	_ = probeFile.Close()
-	if info.Size() == 0 {
-		writeError(w, http.StatusConflict, "la grabación está vacía")
-		return
-	}
-
 	start := resolved.offset - eventPlaybackContext
 	if start < 0 {
 		start = 0
 	}
-	args := []string{
-		"-nostdin", "-hide_banner", "-loglevel", "warning",
-		"-ss", formatFFmpegDuration(start),
-		"-i", resolved.absolute,
-		"-map", "0:v:0", "-map", "0:a:0?", "-sn", "-dn",
-	}
-	camera, _ := s.cameras.Camera(event.CameraID)
-	if strings.EqualFold(camera.Codec, "H264") {
-		args = append(args, "-c:v", "copy")
-	} else {
-		// Keep the source dimensions. Only the codec changes when the browser
-		// cannot decode the original H.265 recording.
-		args = append(args, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p")
-	}
-	args = append(args,
-		"-c:a", "aac", "-b:a", "128k", "-ac", "2",
-		"-avoid_negative_ts", "make_zero",
-		"-movflags", "frag_keyframe+empty_moov+default_base_moof",
-		"-f", "mp4", "pipe:1",
-	)
-
-	cmd := exec.CommandContext(r.Context(), s.cfg.FFmpegPath, args...)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "no se pudo preparar la reproducción")
-		return
-	}
-	stderr := &boundedBuffer{limit: 16 << 10}
-	cmd.Stderr = stderr
-	if err := cmd.Start(); err != nil {
-		writeError(w, http.StatusInternalServerError, "no se pudo iniciar la reproducción")
-		return
-	}
-	defer func() {
-		if cmd.Process != nil && cmd.ProcessState == nil {
-			_ = cmd.Process.Kill()
-		}
-	}()
-
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
-	w.Header().Set("Content-Type", "video/mp4")
-	w.Header().Set("Content-Disposition", "inline")
-	w.Header().Set("Cache-Control", "private, no-store")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(http.StatusOK)
-	_, copyErr := io.Copy(w, stdout)
-	waitErr := cmd.Wait()
-	if copyErr != nil && !errors.Is(copyErr, r.Context().Err()) {
-		s.logger.Debug("event playback client ended", "event_id", event.ID, "error", copyErr)
-	}
-	if waitErr != nil && r.Context().Err() == nil {
-		s.logger.Warn("event playback ffmpeg failed", "event_id", event.ID, "error", model.RedactSecrets(stderr.String()))
-	}
+	s.streamRecordingMP4(w, r, resolved.absolute, start, "event_id", event.ID)
 }
 
 func (s *Server) resolveEventRecording(event model.DetectionEvent) (resolvedEventRecording, bool) {
@@ -329,10 +260,34 @@ func safeRecordingPath(root, relative string) (string, bool) {
 	if err != nil || (absolute != rootAbs && !strings.HasPrefix(absolute, rootAbs+string(os.PathSeparator))) {
 		return "", false
 	}
+	current := rootAbs
+	for _, part := range strings.Split(clean, string(os.PathSeparator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, statErr := os.Lstat(current)
+		if statErr != nil {
+			if errors.Is(statErr, os.ErrNotExist) {
+				break
+			}
+			return "", false
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", false
+		}
+	}
 	return absolute, true
 }
 
 func openRegularRecording(path string) (*os.File, os.FileInfo, error) {
+	linkInfo, err := os.Lstat(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	if linkInfo.Mode()&os.ModeSymlink != 0 {
+		return nil, nil, errors.New("la grabación no puede ser un enlace simbólico")
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, nil, err

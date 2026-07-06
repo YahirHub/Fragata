@@ -44,6 +44,11 @@ type Config struct {
 	MaxViewers           int
 	LiveIdleTimeout      time.Duration
 	FFmpegPath           string
+	FFprobePath          string
+	MaxTranscodes        int
+	LoginMaxAttempts     int
+	LoginWindow          time.Duration
+	LoginBlockDuration   time.Duration
 	SecretKey            []byte
 	SFTP                 SFTPConfig
 }
@@ -98,6 +103,10 @@ func Load(dotenvPath string) (Config, error) {
 		STUNServers:          envList("FRAGATA_STUN_SERVERS", nil),
 		MaxViewers:           envInt("FRAGATA_MAX_VIEWERS", 32),
 		LiveIdleTimeout:      envDuration("FRAGATA_LIVE_IDLE_TIMEOUT", 30*time.Second),
+		MaxTranscodes:        envInt("FRAGATA_MAX_TRANSCODES", 2),
+		LoginMaxAttempts:     envInt("FRAGATA_LOGIN_MAX_ATTEMPTS", 5),
+		LoginWindow:          envDuration("FRAGATA_LOGIN_WINDOW", time.Minute),
+		LoginBlockDuration:   envDuration("FRAGATA_LOGIN_BLOCK_DURATION", 10*time.Minute),
 		SFTP: SFTPConfig{
 			Enabled:        envBool("FRAGATA_SFTP_ENABLED", false),
 			Host:           strings.TrimSpace(os.Getenv("FRAGATA_SFTP_HOST")),
@@ -117,6 +126,7 @@ func Load(dotenvPath string) (Config, error) {
 		return Config{}, err
 	}
 	cfg.FFmpegPath = ffmpegPath
+	cfg.FFprobePath = resolveFFprobe(ffmpegPath)
 
 	if cfg.AdminUser == "" || cfg.AdminPassword == "" {
 		cfg.AdminUser = ""
@@ -130,6 +140,29 @@ func Load(dotenvPath string) (Config, error) {
 	}
 	if cfg.MaxViewers < 1 || cfg.MaxViewers > 256 {
 		return Config{}, errors.New("FRAGATA_MAX_VIEWERS debe estar entre 1 y 256")
+	}
+	if cfg.MaxTranscodes < 1 || cfg.MaxTranscodes > 16 {
+		return Config{}, errors.New("FRAGATA_MAX_TRANSCODES debe estar entre 1 y 16")
+	}
+	if cfg.LoginMaxAttempts < 2 || cfg.LoginMaxAttempts > 20 {
+		return Config{}, errors.New("FRAGATA_LOGIN_MAX_ATTEMPTS debe estar entre 2 y 20")
+	}
+	if cfg.LoginWindow < 10*time.Second || cfg.LoginWindow > time.Hour {
+		return Config{}, errors.New("FRAGATA_LOGIN_WINDOW debe estar entre 10s y 1h")
+	}
+	if cfg.LoginBlockDuration < time.Minute || cfg.LoginBlockDuration > 24*time.Hour {
+		return Config{}, errors.New("FRAGATA_LOGIN_BLOCK_DURATION debe estar entre 1m y 24h")
+	}
+	if cfg.AuthEnabled() {
+		if len(cfg.AdminUser) > 128 {
+			return Config{}, errors.New("FRAGATA_ADMIN_USER no puede superar 128 caracteres")
+		}
+		if len(cfg.AdminPassword) < 12 {
+			return Config{}, errors.New("FRAGATA_ADMIN_PASSWORD debe tener al menos 12 caracteres")
+		}
+		if len(cfg.AdminPassword) > 1024 {
+			return Config{}, errors.New("FRAGATA_ADMIN_PASSWORD no puede superar 1024 caracteres")
+		}
 	}
 	if cfg.LiveIdleTimeout < 10*time.Second || cfg.LiveIdleTimeout > 10*time.Minute {
 		return Config{}, errors.New("FRAGATA_LIVE_IDLE_TIMEOUT debe estar entre 10s y 10m")
@@ -179,6 +212,25 @@ func resolveExecutable(configured, fallback string) (string, error) {
 		return "", fmt.Errorf("FRAGATA_FFMPEG_PATH no apunta a un ejecutable válido: %w", err)
 	}
 	return path, nil
+}
+
+func resolveFFprobe(ffmpegPath string) string {
+	if strings.TrimSpace(ffmpegPath) == "" {
+		return ""
+	}
+	name := "ffprobe"
+	if strings.EqualFold(filepath.Ext(ffmpegPath), ".exe") {
+		name += ".exe"
+	}
+	sibling := filepath.Join(filepath.Dir(ffmpegPath), name)
+	if info, err := os.Stat(sibling); err == nil && !info.IsDir() {
+		return sibling
+	}
+	path, err := exec.LookPath(name)
+	if err != nil {
+		return ""
+	}
+	return path
 }
 
 func (c Config) AuthEnabled() bool { return c.AdminUser != "" && c.AdminPassword != "" }

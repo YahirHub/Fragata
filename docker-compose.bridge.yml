@@ -1,32 +1,65 @@
-# Alternativa para entornos donde network_mode: host no está disponible.
-# La alta manual por IP puede funcionar, pero WS-Discovery ONVIF multicast
-# normalmente no atravesará la red bridge y el firewall FORWARD del host debe
-# permitir el acceso hacia la subred de cámaras.
+# Alternativa cuando network_mode: host no está disponible.
+# WS-Discovery ONVIF multicast normalmente no atravesará la red bridge;
+# el alta manual por IP o dominio sí puede funcionar si el host permite el tráfico.
 services:
   fragata:
     build:
       context: .
+      args:
+        VERSION: ${FRAGATA_VERSION:-0.9.0}
     container_name: fragata
     restart: unless-stopped
+    init: true
+    user: "${FRAGATA_UID:-1000}:${FRAGATA_GID:-1000}"
     env_file:
       - .env
     environment:
-      FRAGATA_LISTEN_HOST: ${FRAGATA_LISTEN_HOST:-0.0.0.0}
-      FRAGATA_LISTEN_PORT: 8080
+      FRAGATA_LISTEN_HOST: 0.0.0.0
+      FRAGATA_LISTEN_PORT: ${FRAGATA_LISTEN_PORT:-8080}
+      FRAGATA_ADMIN_USER: ${FRAGATA_ADMIN_USER:?Define FRAGATA_ADMIN_USER en .env}
+      FRAGATA_ADMIN_PASSWORD: ${FRAGATA_ADMIN_PASSWORD:?Define una contraseña de al menos 12 caracteres en .env}
       FRAGATA_ALLOW_PUBLIC_CAMERAS: ${FRAGATA_ALLOW_PUBLIC_CAMERAS:-true}
       FRAGATA_DATA_DIR: /data
-      FRAGATA_RECORDINGS_DIR: /data/recordings
-      TZ: America/Mexico_City
+      FRAGATA_RECORDINGS_DIR: /recordings
+      FRAGATA_LOG_PATH: /data/logs.txt
+      FRAGATA_MAX_TRANSCODES: ${FRAGATA_MAX_TRANSCODES:-2}
+      TZ: ${TZ:-America/Mexico_City}
     ports:
-      - "8080:8080"
+      - "${FRAGATA_HTTP_PORT:-8080}:${FRAGATA_LISTEN_PORT:-8080}"
     volumes:
-      - fragata_data:/data
+      - type: bind
+        source: ${FRAGATA_HOST_DATA_DIR:-./data}
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${FRAGATA_HOST_RECORDINGS_DIR:-./recordings}
+        target: /recordings
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./config
+        target: /etc/fragata/config
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    stop_grace_period: 30s
     healthcheck:
-      test: ["CMD", "/fragata", "-healthcheck", "http://127.0.0.1:8080/healthz"]
+      test: ["CMD", "/usr/local/bin/fragata", "-healthcheck", "http://127.0.0.1:${FRAGATA_LISTEN_PORT:-8080}/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 15s
-
-volumes:
-  fragata_data:
+      start_period: 20s
+    logging:
+      driver: local
+      options:
+        max-size: "5m"
+        max-file: "2"

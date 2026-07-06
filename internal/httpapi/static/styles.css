@@ -756,3 +756,79 @@ body { overflow-x: hidden; }
   .sidebar-toggle,
   .theme-toggle { transition: none; }
 }
+
+/* Recording library and daily timeline */
+.recording-date-actions { display: flex; align-items: center; gap: .5rem; }
+.recording-days { display: flex; align-items: center; gap: .55rem; overflow-x: auto; padding-bottom: .15rem; scrollbar-width: thin; }
+.recording-day-chip { min-width: 72px; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: .5rem; padding: .55rem .7rem; border: 1px solid var(--fragata-border); border-radius: 11px; color: #4c5870; background: var(--fragata-surface); font-size: .76rem; white-space: nowrap; transition: border-color .18s ease, background-color .18s ease, color .18s ease, transform .18s ease; }
+.recording-day-chip:hover { border-color: rgba(78,115,223,.45); color: var(--fragata-primary); transform: translateY(-1px); }
+.recording-day-chip.active { border-color: var(--fragata-primary); color: #fff; background: var(--fragata-primary); box-shadow: 0 .35rem .9rem rgba(78,115,223,.22); }
+.recording-day-chip span { min-width: 24px; padding: .1rem .38rem; border-radius: 999px; text-align: center; background: rgba(108,117,125,.12); }
+.recording-day-chip.active span { background: rgba(255,255,255,.2); }
+.recording-player-stage { position: relative; min-height: 280px; display: grid; place-items: center; overflow: hidden; background: #05070b; }
+.recording-player-stage video { display: block; width: 100%; max-height: min(70vh, 760px); background: #000; object-fit: contain; }
+.recording-player-loading { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: .75rem; color: rgba(255,255,255,.9); background: rgba(4,7,12,.64); backdrop-filter: blur(2px); pointer-events: none; }
+.recording-player-toolbar { min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .75rem 1rem; border-top: 1px solid var(--fragata-border); }
+.timeline-legend { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem .9rem; color: #6c757d; font-size: .72rem; }
+.timeline-legend span { display: inline-flex; align-items: center; gap: .35rem; }
+.timeline-swatch { width: 10px; height: 10px; display: inline-block; border-radius: 3px; background: #4e73df; }
+.timeline-swatch.event { border-radius: 50%; background: #dc3545; }
+.timeline-swatch.active { background: #20c997; }
+.recording-timeline-scroll { position: relative; height: min(68vh, 660px); min-height: 420px; overflow-y: auto; overflow-x: hidden; background: linear-gradient(90deg, rgba(78,115,223,.025), transparent 42%); scrollbar-width: thin; }
+.recording-timeline { position: relative; min-width: 320px; }
+.timeline-hour { position: absolute; left: 0; right: 0; height: 1px; display: flex; align-items: center; pointer-events: none; }
+.timeline-hour span { width: 64px; flex: 0 0 64px; padding-right: .65rem; color: #7b8799; text-align: right; font-size: .68rem; transform: translateY(-50%); }
+.timeline-hour i { height: 1px; flex: 1 1 auto; background: var(--fragata-border); opacity: .72; }
+.timeline-recording { position: absolute; left: 78px; right: 18px; z-index: 2; min-height: 9px; padding: 0 .4rem; overflow: hidden; border: 0; border-left: 4px solid #3157c7; border-radius: 4px; color: #16336f; background: linear-gradient(90deg, rgba(78,115,223,.52), rgba(78,115,223,.2)); box-shadow: inset 0 0 0 1px rgba(49,87,199,.17); text-align: left; cursor: pointer; transition: filter .15s ease, transform .15s ease, box-shadow .15s ease; }
+.timeline-recording:hover { z-index: 5; filter: saturate(1.2) brightness(1.04); transform: scaleY(1.2); box-shadow: 0 .25rem .7rem rgba(49,87,199,.2); }
+.timeline-recording span { display: block; overflow: hidden; color: inherit; font-size: .62rem; font-weight: 700; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+.timeline-recording.pending { border-left-color: #0dcaf0; background: repeating-linear-gradient(135deg, rgba(13,202,240,.42), rgba(13,202,240,.42) 8px, rgba(13,202,240,.18) 8px, rgba(13,202,240,.18) 16px); cursor: default; }
+.timeline-recording.recovered { border-left-color: #ffc107; background: linear-gradient(90deg, rgba(255,193,7,.48), rgba(255,193,7,.16)); }
+.timeline-recording.active { z-index: 4; border-left-color: #198754; color: #0c5030; background: linear-gradient(90deg, rgba(32,201,151,.64), rgba(32,201,151,.26)); box-shadow: 0 0 0 2px rgba(25,135,84,.22), 0 .25rem .75rem rgba(25,135,84,.18); }
+.timeline-event { position: absolute; left: 53px; z-index: 6; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 2px solid var(--fragata-surface); border-radius: 50%; color: #fff; background: #dc3545; box-shadow: 0 .2rem .55rem rgba(220,53,69,.32); transform: translateY(-50%); }
+.timeline-event.person { background: #6f42c1; box-shadow: 0 .2rem .55rem rgba(111,66,193,.32); }
+.timeline-event i { font-size: .7rem; }
+.recording-list { max-height: min(68vh, 660px); overflow-y: auto; scrollbar-width: thin; }
+.recording-list-item { display: flex; align-items: center; gap: .75rem; padding: .85rem 1rem; border-bottom: 1px solid var(--fragata-border); transition: background-color .15s ease, box-shadow .15s ease; }
+.recording-list-item:last-child { border-bottom: 0; }
+.recording-list-item:hover { background: rgba(78,115,223,.035); }
+.recording-list-item.active { background: rgba(32,201,151,.09); box-shadow: inset 4px 0 #20c997; }
+.recording-list-main { min-width: 0; flex: 1 1 auto; display: flex; align-items: center; gap: .75rem; padding: 0; border: 0; color: inherit; background: transparent; text-align: left; }
+.recording-list-main:disabled { cursor: default; opacity: .72; }
+.recording-list-icon { width: 38px; height: 38px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 10px; color: var(--fragata-primary); background: rgba(78,115,223,.1); }
+.recording-list-copy { min-width: 0; display: grid; gap: .12rem; }
+.recording-list-copy strong { color: #2f3a4e; font-size: .86rem; }
+.recording-list-copy small { overflow: hidden; color: #7b8799; font-size: .71rem; text-overflow: ellipsis; white-space: nowrap; }
+.recording-list-actions { flex: 0 0 auto; display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: .4rem; }
+
+[data-bs-theme="dark"] .recording-day-chip { color: #b8c3d3; background: #121a28; }
+[data-bs-theme="dark"] .recording-day-chip.active { color: #fff; background: var(--fragata-primary); }
+[data-bs-theme="dark"] .recording-player-toolbar { border-color: var(--fragata-border); }
+[data-bs-theme="dark"] .recording-timeline-scroll { background: linear-gradient(90deg, rgba(141,168,255,.035), transparent 42%); }
+[data-bs-theme="dark"] .timeline-recording { color: #dce7ff; background: linear-gradient(90deg, rgba(78,115,223,.6), rgba(78,115,223,.28)); box-shadow: inset 0 0 0 1px rgba(141,168,255,.16); }
+[data-bs-theme="dark"] .timeline-recording.active { color: #e7fff7; background: linear-gradient(90deg, rgba(32,201,151,.68), rgba(32,201,151,.3)); }
+[data-bs-theme="dark"] .timeline-event { border-color: #161d2b; }
+[data-bs-theme="dark"] .recording-list-item:hover { background: rgba(141,168,255,.045); }
+[data-bs-theme="dark"] .recording-list-item.active { background: rgba(32,201,151,.11); }
+[data-bs-theme="dark"] .recording-list-copy strong { color: #dce3ed; }
+[data-bs-theme="dark"] .recording-list-copy small,
+[data-bs-theme="dark"] .timeline-legend,
+[data-bs-theme="dark"] .timeline-hour span { color: #929fb2; }
+[data-bs-theme="dark"] .recording-list-icon { color: #9db4ff; background: rgba(78,115,223,.17); }
+
+@media (max-width: 767.98px) {
+  .recording-player-stage { min-height: 220px; }
+  .recording-player-toolbar { align-items: stretch; flex-direction: column; }
+  .recording-timeline-scroll,
+  .recording-list { height: 520px; max-height: 70vh; }
+  .recording-list-item { align-items: flex-start; flex-direction: column; }
+  .recording-list-actions { width: 100%; padding-left: 50px; justify-content: flex-start; }
+}
+
+@media (max-width: 575.98px) {
+  .recording-date-actions .btn { min-height: 42px; }
+  .recording-days { margin-right: -.5rem; padding-right: .5rem; }
+  .timeline-recording { left: 72px; right: 10px; }
+  .timeline-hour span { width: 56px; flex-basis: 56px; }
+  .timeline-event { left: 47px; }
+}
