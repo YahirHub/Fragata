@@ -44,7 +44,7 @@ Incluido:
 - Confirmación humana beta mediante HOG/SVM embebido, ejecutada solo después de detectar movimiento para reducir consumo.
 - Configuración por cámara de sensibilidad, intervalo, confianza humana, enfriamiento y zona rectangular de análisis.
 - Página de eventos con miniaturas originales, filtros por cámara y tipo, vínculo al segmento MKV y reproducción desde el instante detectado.
-- Videoteca local con filtro por cámara y día, días disponibles, lista cronológica, descarga del MKV original y línea de tiempo diaria con marcadores de eventos.
+- Videoteca local con filtro por cámara y día, días disponibles, lista cronológica paginada, descarga del MKV original y línea de tiempo horizontal de 24 horas con carriles separados y eventos agrupados.
 - Reproducción histórica desde cualquier segundo del segmento, detección del códec real mediante FFprobe y límite global de transcodificaciones.
 
 No incluido todavía:

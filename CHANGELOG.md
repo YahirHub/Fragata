@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.1 - 2026-07-05
+
+- Convierte la línea de tiempo de grabaciones a una pista horizontal de 24 horas con escala amplia y desplazamiento lateral.
+- Distribuye automáticamente videos superpuestos en carriles independientes para que ningún segmento quede montado sobre otro.
+- Mantiene un ancho mínimo legible para segmentos cortos y muestra la línea de tiempo a ancho completo sobre la lista cronológica.
+- Agrupa eventos en intervalos de diez minutos, con un máximo visual de 144 marcadores diarios, evitando acumulaciones ilegibles.
+- Limita la representación visual de la línea de tiempo a 1,200 bloques y conserva todos los videos accesibles desde la lista.
+- Pagina la lista cronológica en bloques de 200 elementos, evitando miles de nodos simultáneos en el navegador.
+- Corrige el indicador doble al preparar un video ocultando el cargador nativo bajo una única pantalla de carga opaca.
+- Evita volver a mostrar la pantalla completa de preparación cuando un video ya iniciado entra temporalmente en buffering.
+
 ## 0.9.0 - 2026-07-05
 
 - Añade el apartado **Grabaciones** con filtro por cámara y día, días disponibles, resumen de espacio y duración, lista cronológica y línea de tiempo diaria de 24 horas.

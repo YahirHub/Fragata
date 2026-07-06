@@ -1,14 +1,28 @@
 (() => {
   const { q, api, initLayout, notify, escapeHTML: esc } = window.Fragata;
-  const TIMELINE_HEIGHT = 1536;
+  const TIMELINE_HOUR_WIDTH = 220;
+  const TIMELINE_WIDTH = TIMELINE_HOUR_WIDTH * 24;
+  const TIMELINE_RULER_HEIGHT = 46;
+  const TIMELINE_LANE_HEIGHT = 48;
+  const TIMELINE_EVENT_TRACK_HEIGHT = 48;
+  const TIMELINE_MIN_BAR_WIDTH = 30;
+  const TIMELINE_BAR_GAP = 6;
+  const TIMELINE_MAX_RECORDINGS = 1200;
+  const TIMELINE_EVENT_BUCKET_SECONDS = 10 * 60;
+  const RECORDING_LIST_PAGE_SIZE = 200;
+
   let sources = [];
   let recordings = [];
   let events = [];
   let activeRecording = null;
   let playbackOffset = 0;
   let requestVersion = 0;
+  let currentListPage = 0;
+  let playerHasStarted = false;
 
   const player = q('#recordingPlayer');
+  const playerStage = q('.recording-player-stage');
+  const playerLoading = q('#recordingPlayerLoading');
 
   function localDateValue(date = new Date()) {
     const year = date.getFullYear();
@@ -68,10 +82,6 @@
     return date.getHours() * 3600 + date.getMinutes() * 60 + date.getSeconds() + date.getMilliseconds() / 1000;
   }
 
-  function sourceName(id) {
-    return sources.find((source) => source.id === id)?.name || 'Cámara';
-  }
-
   function updateURL() {
     const params = new URLSearchParams();
     const camera = q('#recordingCamera').value;
@@ -114,35 +124,96 @@
     renderDays(days);
   }
 
-  function hourRows() {
+  function hourColumns(totalHeight) {
     return Array.from({ length: 25 }, (_, hour) => {
-      const top = (hour / 24) * TIMELINE_HEIGHT;
-      return `<div class="timeline-hour" style="top:${top}px"><span>${String(hour).padStart(2, '0')}:00</span><i></i></div>`;
+      const left = hour * TIMELINE_HOUR_WIDTH;
+      const edgeClass = hour === 0 ? ' hour-start' : hour === 24 ? ' hour-end' : '';
+      return `<div class="timeline-hour${edgeClass}" style="left:${left}px;height:${totalHeight}px"><span>${String(hour).padStart(2, '0')}:00</span><i></i></div>`;
     }).join('');
+  }
+
+  function limitTimelineRecordings(items) {
+    if (items.length <= TIMELINE_MAX_RECORDINGS) return items;
+    const limited = [];
+    const step = items.length / TIMELINE_MAX_RECORDINGS;
+    for (let index = 0; index < TIMELINE_MAX_RECORDINGS; index += 1) {
+      limited.push(items[Math.min(items.length - 1, Math.floor(index * step))]);
+    }
+    if (activeRecording && !limited.some((item) => item.id === activeRecording.id)) limited[limited.length - 1] = activeRecording;
+    return limited.sort((a, b) => new Date(a.started_at) - new Date(b.started_at));
+  }
+
+  function layoutRecordingBars(items) {
+    const laneEnds = [];
+    return items.map((recording) => {
+      const startSeconds = Math.max(0, Math.min(86400, secondsOfDay(recording.started_at)));
+      const duration = Math.max(1, Math.min(Number(recording.duration_seconds || 0), 86400 - startSeconds));
+      let left = (startSeconds / 86400) * TIMELINE_WIDTH;
+      const proportionalWidth = (duration / 86400) * TIMELINE_WIDTH;
+      const width = Math.min(TIMELINE_WIDTH, Math.max(TIMELINE_MIN_BAR_WIDTH, proportionalWidth));
+      if (left + width > TIMELINE_WIDTH) left = Math.max(0, TIMELINE_WIDTH - width);
+      let lane = laneEnds.findIndex((end) => left >= end + TIMELINE_BAR_GAP);
+      if (lane === -1) {
+        lane = laneEnds.length;
+        laneEnds.push(0);
+      }
+      laneEnds[lane] = left + width;
+      return { recording, left, width, lane };
+    });
+  }
+
+  function clusterTimelineEvents(items) {
+    const buckets = new Map();
+    items.forEach((event) => {
+      const seconds = Math.max(0, Math.min(86399.999, secondsOfDay(event.created_at)));
+      const bucket = Math.floor(seconds / TIMELINE_EVENT_BUCKET_SECONDS);
+      if (!buckets.has(bucket)) buckets.set(bucket, []);
+      buckets.get(bucket).push({ event, seconds });
+    });
+    return [...buckets.entries()].sort((a, b) => a[0] - b[0]).map(([, entries]) => {
+      const seconds = entries.reduce((sum, entry) => sum + entry.seconds, 0) / entries.length;
+      const person = entries.some((entry) => entry.event.type === 'person');
+      return { entries, seconds, person, first: entries[0].event };
+    });
   }
 
   function renderTimeline() {
     const timeline = q('#recordingTimeline');
-    timeline.style.height = `${TIMELINE_HEIGHT}px`;
     const sorted = [...recordings].sort((a, b) => new Date(a.started_at) - new Date(b.started_at));
-    const recordingBars = sorted.map((recording) => {
-      const start = secondsOfDay(recording.started_at);
-      const duration = Math.max(1, Math.min(Number(recording.duration_seconds || 0), 86400 - start));
-      const top = (start / 86400) * TIMELINE_HEIGHT;
-      const height = Math.max(9, (duration / 86400) * TIMELINE_HEIGHT);
+    const visibleRecordings = limitTimelineRecordings(sorted);
+    const bars = layoutRecordingBars(visibleRecordings);
+    const laneCount = Math.max(1, bars.reduce((maximum, item) => Math.max(maximum, item.lane + 1), 0));
+    const eventTrackTop = TIMELINE_RULER_HEIGHT + laneCount * TIMELINE_LANE_HEIGHT + 6;
+    const totalHeight = eventTrackTop + TIMELINE_EVENT_TRACK_HEIGHT;
+    const clusters = clusterTimelineEvents(events);
+
+    timeline.style.width = `${TIMELINE_WIDTH}px`;
+    timeline.style.height = `${totalHeight}px`;
+
+    const recordingBars = bars.map(({ recording, left, width, lane }) => {
       const classes = ['timeline-recording'];
       if (recording.pending) classes.push('pending');
       if (recording.recovered) classes.push('recovered');
       if (activeRecording?.id === recording.id) classes.push('active');
+      const top = TIMELINE_RULER_HEIGHT + lane * TIMELINE_LANE_HEIGHT + 7;
       const title = `${recording.camera_name} · ${formatTime(recording.started_at)}–${formatTime(recording.ended_at)} · ${formatDuration(recording.duration_seconds)}`;
-      return `<button class="${classes.join(' ')}" style="top:${top}px;height:${height}px" type="button" data-recording-id="${esc(recording.id)}" title="${esc(title)}" aria-label="Reproducir ${esc(title)}"><span>${esc(formatTime(recording.started_at, false))}</span></button>`;
+      const label = width >= 76 ? `${formatTime(recording.started_at, false)} · ${recording.camera_name}` : width >= 45 ? formatTime(recording.started_at, false) : '';
+      return `<button class="${classes.join(' ')}" style="left:${left}px;top:${top}px;width:${width}px" type="button" data-recording-id="${esc(recording.id)}" title="${esc(title)}" aria-label="Reproducir ${esc(title)}">${label ? `<span>${esc(label)}</span>` : '<i class="bi bi-play-fill" aria-hidden="true"></i>'}</button>`;
     }).join('');
-    const markers = events.map((event) => {
-      const top = (secondsOfDay(event.created_at) / 86400) * TIMELINE_HEIGHT;
-      const person = event.type === 'person';
-      return `<button class="timeline-event ${person ? 'person' : 'motion'}" style="top:${top}px" type="button" data-event-id="${esc(event.id)}" data-recording-id="${esc(event.recording_id || '')}" data-offset="${Number(event.offset_seconds || 0)}" title="${person ? 'Persona' : 'Movimiento'} · ${esc(formatTime(event.created_at))}" aria-label="${person ? 'Persona' : 'Movimiento'} a las ${esc(formatTime(event.created_at))}"><i class="bi ${person ? 'bi-person-fill' : 'bi-activity'}"></i></button>`;
+
+    const markers = clusters.map((cluster) => {
+      const left = Math.max(17, Math.min(TIMELINE_WIDTH - 17, (cluster.seconds / 86400) * TIMELINE_WIDTH));
+      const count = cluster.entries.length;
+      const firstTime = formatTime(cluster.first.created_at);
+      const title = count > 1
+        ? `${count} eventos entre ${firstTime} y ${formatTime(cluster.entries[cluster.entries.length - 1].event.created_at)}`
+        : `${cluster.person ? 'Persona' : 'Movimiento'} · ${firstTime}`;
+      const contents = count > 1 ? `<span>${count > 99 ? '99+' : count}</span>` : `<i class="bi ${cluster.person ? 'bi-person-fill' : 'bi-activity'}"></i>`;
+      return `<button class="timeline-event ${cluster.person ? 'person' : 'motion'} ${count > 1 ? 'cluster' : ''}" style="left:${left}px;top:${eventTrackTop + 8}px" type="button" data-event-id="${esc(cluster.first.id)}" data-recording-id="${esc(cluster.first.recording_id || '')}" data-offset="${Number(cluster.first.offset_seconds || 0)}" title="${esc(title)}" aria-label="${esc(title)}">${contents}</button>`;
     }).join('');
-    timeline.innerHTML = hourRows() + recordingBars + markers;
+
+    timeline.innerHTML = `${hourColumns(totalHeight)}<div class="timeline-event-track" style="top:${eventTrackTop}px;width:${TIMELINE_WIDTH}px"><span>Eventos</span></div>${recordingBars}${markers}`;
+
     timeline.querySelectorAll('[data-recording-id].timeline-recording').forEach((button) => button.addEventListener('click', () => {
       const recording = recordings.find((item) => item.id === button.dataset.recordingId);
       if (recording) playRecording(recording, 0);
@@ -152,10 +223,21 @@
       if (recording) playRecording(recording, Math.max(0, Number(button.dataset.offset || 0) - 5));
       else location.href = `/events/${encodeURIComponent(button.dataset.eventId)}`;
     }));
+
+    const hiddenRecordings = Math.max(0, sorted.length - visibleRecordings.length);
+    const groupedEvents = Math.max(0, events.length - clusters.length);
+    const summary = [`${sorted.length} video${sorted.length === 1 ? '' : 's'}`, `${clusters.length} marcador${clusters.length === 1 ? '' : 'es'} de eventos`];
+    if (hiddenRecordings) summary.push(`vista visual limitada a ${TIMELINE_MAX_RECORDINGS} bloques`);
+    if (groupedEvents) summary.push(`${groupedEvents} eventos agrupados en intervalos de 10 min`);
+    q('#timelineSummary').textContent = `${summary.join(' · ')}. Desplázate horizontalmente para recorrer el día.`;
   }
 
   function renderList() {
-    q('#recordingList').innerHTML = recordings.map((recording) => {
+    const pageCount = Math.max(1, Math.ceil(recordings.length / RECORDING_LIST_PAGE_SIZE));
+    currentListPage = Math.max(0, Math.min(currentListPage, pageCount - 1));
+    const pageStart = currentListPage * RECORDING_LIST_PAGE_SIZE;
+    const visible = recordings.slice(pageStart, pageStart + RECORDING_LIST_PAGE_SIZE);
+    q('#recordingList').innerHTML = visible.map((recording) => {
       const status = recording.pending
         ? '<span class="badge text-bg-info-subtle text-info-emphasis"><i class="bi bi-record-circle me-1"></i>Grabando</span>'
         : recording.recovered
@@ -170,10 +252,19 @@
         <div class="recording-list-actions">${status}${recording.event_count ? `<span class="badge text-bg-primary-subtle text-primary-emphasis"><i class="bi bi-activity me-1"></i>${recording.event_count}</span>` : ''}${recording.download_url ? `<a class="btn btn-sm btn-light" href="${esc(recording.download_url)}" title="Descargar MKV"><i class="bi bi-download"></i></a>` : ''}</div>
       </article>`;
     }).join('');
+
     q('#recordingList').querySelectorAll('[data-play-recording]').forEach((button) => button.addEventListener('click', () => {
       const recording = recordings.find((item) => item.id === button.dataset.playRecording);
       if (recording) playRecording(recording, 0);
     }));
+
+    const first = recordings.length ? pageStart + 1 : 0;
+    const last = pageStart + visible.length;
+    q('#recordingListCounter').textContent = recordings.length ? `Mostrando ${first}–${last} de ${recordings.length}` : '';
+    q('#recordingListFooter').classList.toggle('hidden', pageCount <= 1);
+    q('#recordingListPage').textContent = `Página ${currentListPage + 1} de ${pageCount}`;
+    q('#previousRecordingsPage').disabled = currentListPage === 0;
+    q('#nextRecordingsPage').disabled = currentListPage >= pageCount - 1;
   }
 
   function setActiveRecording(recording) {
@@ -181,6 +272,12 @@
     document.querySelectorAll('.timeline-recording.active, .recording-list-item.active').forEach((element) => element.classList.remove('active'));
     document.querySelector(`.timeline-recording[data-recording-id="${CSS.escape(recording.id)}"]`)?.classList.add('active');
     document.querySelector(`[data-list-recording="${CSS.escape(recording.id)}"]`)?.classList.add('active');
+  }
+
+  function setPlayerLoading(loading) {
+    playerLoading.classList.toggle('hidden', !loading);
+    playerStage.classList.toggle('is-preparing', loading && !playerHasStarted);
+    playerStage.setAttribute('aria-busy', loading ? 'true' : 'false');
   }
 
   function playRecording(recording, offset = 0) {
@@ -193,12 +290,15 @@
       return;
     }
     playbackOffset = Math.max(0, Math.min(Number(offset || 0), Math.max(0, Number(recording.duration_seconds || 0) - 0.1)));
+    playerHasStarted = false;
+    const recordingIndex = recordings.findIndex((item) => item.id === recording.id);
+    if (recordingIndex >= 0) currentListPage = Math.floor(recordingIndex / RECORDING_LIST_PAGE_SIZE);
     setActiveRecording(recording);
     q('#recordingPlayerCard').classList.remove('hidden');
     q('#recordingPlayerTitle').textContent = `${recording.camera_name} · ${formatDate(recording.started_at)}`;
     q('#recordingDownload').href = recording.download_url || '#';
     q('#recordingDownload').classList.toggle('hidden', !recording.download_url);
-    q('#recordingPlayerLoading').classList.remove('hidden');
+    setPlayerLoading(true);
     const actualStart = new Date(new Date(recording.started_at).getTime() + playbackOffset * 1000);
     q('#recordingPlayerMeta').textContent = `Desde ${formatTime(actualStart)} · Segmento ${formatDuration(recording.duration_seconds)} · ${formatBytes(recording.size)}`;
     player.src = `${recording.playback_url}?start=${encodeURIComponent(playbackOffset.toFixed(3))}&_=${Date.now()}`;
@@ -217,13 +317,14 @@
 
   function scrollTimelineToRecordings() {
     if (!recordings.length) return;
-    const earliest = recordings.reduce((best, item) => secondsOfDay(item.started_at) < best ? secondsOfDay(item.started_at) : best, 86400);
-    q('#timelineScroll').scrollTop = Math.max(0, (earliest / 86400) * TIMELINE_HEIGHT - 100);
+    const earliest = recordings.reduce((best, item) => Math.min(best, secondsOfDay(item.started_at)), 86400);
+    q('#timelineScroll').scrollLeft = Math.max(0, (earliest / 86400) * TIMELINE_WIDTH - 90);
   }
 
   function renderResponse(response) {
     recordings = response.recordings || [];
     events = response.events || [];
+    currentListPage = 0;
     if (activeRecording && !recordings.some((recording) => recording.id === activeRecording.id)) closePlayer();
     renderStats(response);
     q('#recordingsLoading').classList.add('hidden');
@@ -261,11 +362,15 @@
     player.pause();
     player.removeAttribute('src');
     player.load();
+    playerHasStarted = false;
+    setPlayerLoading(false);
     activeRecording = null;
     playbackOffset = 0;
     q('#recordingPlayerCard').classList.add('hidden');
-    renderTimeline();
-    renderList();
+    if (recordings.length) {
+      renderTimeline();
+      renderList();
+    }
   }
 
   async function init() {
@@ -288,14 +393,40 @@
       await loadRecordings();
       event.currentTarget.disabled = false;
     });
+    q('#previousRecordingsPage').addEventListener('click', () => {
+      currentListPage = Math.max(0, currentListPage - 1);
+      renderList();
+      q('#recordingList').scrollTop = 0;
+    });
+    q('#nextRecordingsPage').addEventListener('click', () => {
+      const lastPage = Math.max(0, Math.ceil(recordings.length / RECORDING_LIST_PAGE_SIZE) - 1);
+      currentListPage = Math.min(lastPage, currentListPage + 1);
+      renderList();
+      q('#recordingList').scrollTop = 0;
+    });
     q('#closeRecordingPlayer').addEventListener('click', closePlayer);
     q('#rewindRecording').addEventListener('click', () => jumpPlayback(-10));
     q('#forwardRecording').addEventListener('click', () => jumpPlayback(10));
-    player.addEventListener('playing', () => q('#recordingPlayerLoading').classList.add('hidden'));
-    player.addEventListener('canplay', () => q('#recordingPlayerLoading').classList.add('hidden'));
-    player.addEventListener('waiting', () => q('#recordingPlayerLoading').classList.remove('hidden'));
+    player.addEventListener('loadstart', () => {
+      if (!playerHasStarted) setPlayerLoading(true);
+    });
+    player.addEventListener('loadeddata', () => {
+      playerHasStarted = true;
+      setPlayerLoading(false);
+    });
+    player.addEventListener('playing', () => {
+      playerHasStarted = true;
+      setPlayerLoading(false);
+    });
+    player.addEventListener('canplay', () => {
+      playerHasStarted = true;
+      setPlayerLoading(false);
+    });
+    player.addEventListener('waiting', () => {
+      if (!playerHasStarted) setPlayerLoading(true);
+    });
     player.addEventListener('error', () => {
-      q('#recordingPlayerLoading').classList.add('hidden');
+      setPlayerLoading(false);
       if (player.error) notify('No se pudo reproducir este segmento. Revise FFmpeg y los logs del servidor.', 'danger');
     });
     await loadRecordings();
