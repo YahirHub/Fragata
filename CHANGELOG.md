@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.2 - 2026-07-06
+
+- Corrige `permission denied` en `/recordings` mediante un entrypoint que prepara volúmenes como root y ejecuta Fragata después con UID/GID no privilegiado.
+- Añade reparación automática e idempotente de permisos, marcador de esquema y verificación real de escritura antes de iniciar el servidor.
+- Incorpora `init.sh` para crear carpetas del host, preparar `.env`, construir con caché, levantar Compose y esperar el healthcheck.
+- Permite actualizar un VPS repitiendo `bash init.sh` después de copiar código o usando `bash init.sh --git-pull`.
+- Ajusta Docker Compose para crear bind mounts ausentes y conservar solo las capacidades mínimas necesarias durante el entrypoint.
+- Añade modos `auto`, `always` y `never` mediante `FRAGATA_REPAIR_PERMISSIONS`.
+
 ## 0.9.1 - 2026-07-05
 
 - Convierte la línea de tiempo de grabaciones a una pista horizontal de 24 horas con escala amplia y desplazamiento lateral.

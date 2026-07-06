@@ -443,28 +443,79 @@ Fragata escribe eventos tanto en la salida estándar como en `FRAGATA_LOG_PATH`.
 
 En servidores Linux, `docker-compose.yml` usa `network_mode: host`. Fragata comparte la red del host para alcanzar cámaras LAN y recibir WS-Discovery multicast. No se declara `ports:` porque el servicio escucha directamente en el puerto configurado del host.
 
-El Compose de producción exige usuario y contraseña, ejecuta con el UID/GID indicado, elimina todas las capabilities, activa `no-new-privileges`, usa raíz de solo lectura y limita procesos. La imagen final Alpine incluye FFmpeg y FFprobe. Solo quedan escribibles `/data`, `/recordings` y un `/tmp` temporal sin ejecución.
+### Despliegue recomendado con `init.sh`
 
-Prepara las carpetas visibles en el host con el mismo UID/GID definido en `.env`:
+El flujo normal para instalar o actualizar Fragata es:
 
 ```bash
 cp .env.example .env
-# Edita .env y define una contraseña de al menos 12 caracteres.
-mkdir -p data recordings
-sudo chown -R "$(id -u):$(id -g)" data recordings
-docker compose build
-docker compose up -d
-docker compose logs -f fragata
+# Puedes editar .env antes del primer inicio.
+bash init.sh
 ```
 
-Montajes predeterminados:
+`init.sh` es idempotente. Crea las carpetas persistentes, ajusta UID/GID, valida `.env`, construye la imagen usando la caché de Docker, ejecuta `docker compose up -d --build --remove-orphans` y espera el healthcheck. Si `FRAGATA_ADMIN_PASSWORD` está vacío, genera una contraseña aleatoria y la muestra una sola vez.
+
+Después de copiar una nueva versión del código al VPS basta con repetir:
+
+```bash
+bash init.sh
+```
+
+Si el proyecto se actualiza directamente desde Git:
+
+```bash
+bash init.sh --git-pull
+```
+
+Opciones útiles:
+
+```bash
+bash init.sh --logs
+bash init.sh --repair-permissions
+bash init.sh --no-cache
+bash init.sh --bridge
+```
+
+La construcción normal es inteligente: las capas que no cambiaron se reutilizan. `--no-cache` solo debe usarse para diagnosticar una imagen dañada o forzar una reconstrucción completa.
+
+### Inicio root controlado y descenso de privilegios
+
+El contenedor no ejecuta el servidor como root. Únicamente el entrypoint comienza como root para:
+
+1. Crear `/data`, `/recordings` y `/data/events`.
+2. Corregir el propietario según `FRAGATA_UID` y `FRAGATA_GID`.
+3. Verificar que el usuario final realmente pueda escribir en ambos volúmenes.
+4. Ejecutar `tini` y Fragata mediante `su-exec` con el UID/GID no privilegiado, sin dejar un proceso root residente.
+
+Esto corrige errores como:
+
+```text
+crear directorio de grabación: mkdir /recordings/corredor: permission denied
+```
+
+La primera reparación o un cambio de UID/GID puede recorrer los archivos existentes. Después se guarda un marcador en `/data/.fragata-permissions` y los reinicios normales solo verifican las carpetas conocidas. El comportamiento se controla con:
+
+```dotenv
+FRAGATA_REPAIR_PERMISSIONS=auto
+```
+
+Valores admitidos:
+
+- `auto`: reparación completa la primera vez o al cambiar UID/GID.
+- `always`: ejecuta reparación completa en cada arranque.
+- `never`: evita el recorrido recursivo y corrige solamente las carpetas conocidas.
+
+Compose elimina todas las capabilities y devuelve únicamente `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETUID` y `SETGID` al entrypoint. Esas capacidades se pierden al cambiar al UID no root. También mantiene `no-new-privileges`, raíz de solo lectura, `tmpfs` sin ejecución y límite de procesos.
+
+### Montajes persistentes
 
 ```text
 ./data       -> /data        state.json, secret.key, logs.txt y eventos
 ./recordings -> /recordings  segmentos MKV visibles y respaldables desde Linux
+./config     -> /etc/fragata/config, solo lectura
 ```
 
-Las rutas pueden cambiarse con `FRAGATA_HOST_DATA_DIR` y `FRAGATA_HOST_RECORDINGS_DIR`. Compose exige que ambas carpetas ya existan para evitar que Docker las cree como `root`. `./config` se monta como solo lectura en `/etc/fragata/config`; un diccionario personalizado debe usar, por ejemplo, `FRAGATA_RTSP_DICTIONARY=/etc/fragata/config/rtsp-paths.txt`. Para una llave SFTP, monta una carpeta de secretos como solo lectura y apunta `FRAGATA_SFTP_PRIVATE_KEY` al archivo dentro de `/run/secrets/fragata`.
+Las rutas pueden cambiarse con `FRAGATA_HOST_DATA_DIR` y `FRAGATA_HOST_RECORDINGS_DIR`. Tanto `init.sh` como el entrypoint pueden crear y preparar las rutas ausentes. Para un diccionario RTSP personalizado usa, por ejemplo, `FRAGATA_RTSP_DICTIONARY=/etc/fragata/config/rtsp-paths.txt`. Para una llave SFTP, monta una carpeta de secretos como solo lectura y apunta `FRAGATA_SFTP_PRIVATE_KEY` al archivo dentro de `/run/secrets/fragata`.
 
 Después abre:
 
@@ -475,7 +526,7 @@ http://IP_DEL_SERVIDOR:8080
 Si el entorno no admite red del host, usa:
 
 ```bash
-docker compose -f docker-compose.bridge.yml up -d --build
+bash init.sh --bridge
 ```
 
 Con bridge, el acceso manual por IP puede funcionar si el firewall permite forwarding, pero el descubrimiento multicast ONVIF puede no atravesar esa red.

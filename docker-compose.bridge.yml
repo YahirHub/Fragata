@@ -6,11 +6,9 @@ services:
     build:
       context: .
       args:
-        VERSION: ${FRAGATA_VERSION:-0.9.1}
+        VERSION: ${FRAGATA_VERSION:-0.9.2}
     container_name: fragata
     restart: unless-stopped
-    init: true
-    user: "${FRAGATA_UID:-1000}:${FRAGATA_GID:-1000}"
     env_file:
       - .env
     environment:
@@ -22,6 +20,9 @@ services:
       FRAGATA_DATA_DIR: /data
       FRAGATA_RECORDINGS_DIR: /recordings
       FRAGATA_LOG_PATH: /data/logs.txt
+      FRAGATA_UID: ${FRAGATA_UID:-1000}
+      FRAGATA_GID: ${FRAGATA_GID:-1000}
+      FRAGATA_REPAIR_PERMISSIONS: ${FRAGATA_REPAIR_PERMISSIONS:-auto}
       FRAGATA_MAX_TRANSCODES: ${FRAGATA_MAX_TRANSCODES:-2}
       TZ: ${TZ:-America/Mexico_City}
     ports:
@@ -31,29 +32,35 @@ services:
         source: ${FRAGATA_HOST_DATA_DIR:-./data}
         target: /data
         bind:
-          create_host_path: false
+          create_host_path: true
       - type: bind
         source: ${FRAGATA_HOST_RECORDINGS_DIR:-./recordings}
         target: /recordings
         bind:
-          create_host_path: false
+          create_host_path: true
       - type: bind
         source: ./config
         target: /etc/fragata/config
         read_only: true
         bind:
-          create_host_path: false
+          create_host_path: true
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=128m,mode=1777
     cap_drop:
       - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
     security_opt:
       - no-new-privileges:true
     pids_limit: 256
     stop_grace_period: 30s
     healthcheck:
-      test: ["CMD", "/usr/local/bin/fragata", "-healthcheck", "http://127.0.0.1:${FRAGATA_LISTEN_PORT:-8080}/healthz"]
+      test: ["CMD", "/usr/local/bin/docker-healthcheck.sh"]
       interval: 30s
       timeout: 5s
       retries: 3
