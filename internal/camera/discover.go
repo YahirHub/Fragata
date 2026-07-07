@@ -26,7 +26,6 @@ type AddRequest struct {
 	SegmentDurationSeconds int64  `json:"segment_duration_seconds,omitempty"`
 	Upload                 *bool  `json:"upload,omitempty"`
 	SFTPProfileID          string `json:"sftp_profile_id,omitempty"`
-	SnapshotURL            string `json:"snapshot_url,omitempty"`
 	InsecureTLS            bool   `json:"insecure_tls,omitempty"`
 }
 
@@ -129,19 +128,6 @@ func Detect(ctx context.Context, cfg config.Config, request AddRequest) (Detecti
 			base.AudioSampleRate = primary.probe.AudioSampleRate
 			base.AudioChannels = primary.probe.AudioChannels
 			base.ProfileToken = primary.profile.Token
-			snapshotURL := inspection.SnapshotURIs[primary.profile.Token]
-			if snapshotURL == "" {
-				for _, candidate := range inspection.SnapshotURIs {
-					snapshotURL = candidate
-					break
-				}
-			}
-			if snapshotURL != "" {
-				snapshotURL = normalizeSnapshotHost(snapshotURL, base.Host)
-				if validated, validateErr := validateSnapshotURL(snapshotURL, base.Host); validateErr == nil {
-					base.SnapshotURL = validated
-				}
-			}
 			base.Manufacturer = inspection.Information.Manufacturer
 			base.Model = inspection.Information.Model
 			base.SerialNumber = inspection.Information.SerialNumber
@@ -285,15 +271,6 @@ func prepareCamera(cfg config.Config, request AddRequest) (model.Camera, string,
 		}
 	}
 
-	snapshotURL := strings.TrimSpace(request.SnapshotURL)
-	if snapshotURL != "" {
-		validated, err := validateSnapshotURL(snapshotURL, host)
-		if err != nil {
-			return model.Camera{}, "", 0, err
-		}
-		snapshotURL = validated
-	}
-
 	base := model.Camera{
 		Name:                   strings.TrimSpace(request.Name),
 		Host:                   host,
@@ -304,13 +281,6 @@ func prepareCamera(cfg config.Config, request AddRequest) (model.Camera, string,
 		SegmentDurationSeconds: request.SegmentDurationSeconds,
 		Upload:                 boolValue(request.Upload, false),
 		SFTPProfileID:          strings.TrimSpace(request.SFTPProfileID),
-		SnapshotURL:            snapshotURL,
-		DetectMotion:           true,
-		MotionSensitivity:      65,
-		DetectionIntervalSecs:  1,
-		PersonConfidence:       55,
-		DetectionCooldownSecs:  30,
-		DetectionZone:          model.DetectionZone{Width: 100, Height: 100},
 	}
 	if base.Name == "" {
 		base.Name = "Cámara " + host

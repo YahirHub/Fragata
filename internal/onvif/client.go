@@ -29,11 +29,10 @@ type Profile struct {
 	Width, Height         int
 }
 type Inspection struct {
-	DeviceService, MediaService string
-	Information                 DeviceInformation
-	Profiles                    []Profile
-	StreamURIs                  map[string]string
-	SnapshotURIs                map[string]string
+	DeviceService, MediaService, EventService string
+	Information                               DeviceInformation
+	Profiles                                  []Profile
+	StreamURIs                                map[string]string
 }
 
 func NewClient(timeout time.Duration, user, pass string, insecureTLS bool) *Client {
@@ -81,22 +80,20 @@ func (c *Client) inspectService(ctx context.Context, deviceService string) (Insp
 	if err != nil {
 		return Inspection{}, fmt.Errorf("GetProfiles: %w", err)
 	}
+	events, _ := c.eventXAddr(ctx, deviceService)
+	if events != "" {
+		events, _ = normalizeEndpointHost(events, deviceService)
+	}
 	uris := map[string]string{}
-	snapshots := map[string]string{}
 	for _, p := range profiles {
 		if uri, err := c.streamURI(ctx, media, p.Token); err == nil && uri != "" {
 			uris[p.Token] = uri
-		}
-		if uri, err := c.snapshotURI(ctx, media, p.Token); err == nil && uri != "" {
-			if normalized, normalizeErr := normalizeEndpointHost(uri, deviceService); normalizeErr == nil {
-				snapshots[p.Token] = normalized
-			}
 		}
 	}
 	if len(uris) == 0 {
 		return Inspection{}, errors.New("ONVIF respondió pero no entregó URL RTSP")
 	}
-	return Inspection{DeviceService: deviceService, MediaService: media, Information: info, Profiles: profiles, StreamURIs: uris, SnapshotURIs: snapshots}, nil
+	return Inspection{DeviceService: deviceService, MediaService: media, EventService: events, Information: info, Profiles: profiles, StreamURIs: uris}, nil
 }
 
 func deviceServiceCandidates(host string) []string {
@@ -196,6 +193,82 @@ func (c *Client) mediaXAddr(ctx context.Context, endpoint string) (string, error
 	return "", errors.New("respuesta sin Media XAddr")
 }
 
+func (c *Client) eventXAddr(ctx context.Context, endpoint string) (string, error) {
+	body := `<tds:GetCapabilities xmlns:tds="http://www.onvif.org/ver10/device/wsdl"><tds:Category>Events</tds:Category></tds:GetCapabilities>`
+	raw, err := c.soap(ctx, endpoint, "http://www.onvif.org/ver10/device/wsdl/GetCapabilities", body)
+	if err == nil {
+		var envelope struct {
+			Body struct {
+				Response struct {
+					Capabilities struct {
+						Events struct {
+							XAddr string `xml:"XAddr"`
+						} `xml:"Events"`
+					} `xml:"Capabilities"`
+				} `xml:"GetCapabilitiesResponse"`
+			} `xml:"Body"`
+		}
+		if decodeErr := xml.Unmarshal(raw, &envelope); decodeErr == nil {
+			if value := strings.TrimSpace(envelope.Body.Response.Capabilities.Events.XAddr); value != "" {
+				return value, nil
+			}
+		}
+	}
+
+	// A few cameras omit Events from GetCapabilities but advertise the
+	// service correctly through GetServices.
+	servicesBody := `<tds:GetServices xmlns:tds="http://www.onvif.org/ver10/device/wsdl"><tds:IncludeCapability>false</tds:IncludeCapability></tds:GetServices>`
+	servicesRaw, servicesErr := c.soap(ctx, endpoint, "http://www.onvif.org/ver10/device/wsdl/GetServices", servicesBody)
+	if servicesErr != nil {
+		if err != nil {
+			return "", err
+		}
+		return "", servicesErr
+	}
+	var servicesEnvelope struct {
+		Body struct {
+			Response struct {
+				Services []struct {
+					Namespace string `xml:"Namespace"`
+					XAddr     string `xml:"XAddr"`
+				} `xml:"Service"`
+			} `xml:"GetServicesResponse"`
+		} `xml:"Body"`
+	}
+	if decodeErr := xml.Unmarshal(servicesRaw, &servicesEnvelope); decodeErr != nil {
+		return "", decodeErr
+	}
+	for _, service := range servicesEnvelope.Body.Response.Services {
+		if strings.TrimSpace(service.Namespace) == "http://www.onvif.org/ver10/events/wsdl" && strings.TrimSpace(service.XAddr) != "" {
+			return strings.TrimSpace(service.XAddr), nil
+		}
+	}
+	return "", errors.New("respuesta sin Events XAddr")
+}
+
+// DiscoverEventService resolves the native ONVIF event service without
+// requiring a media profile or snapshot URL.
+func (c *Client) DiscoverEventService(ctx context.Context, host string) (string, error) {
+	var last error
+	for _, deviceService := range deviceServiceCandidates(host) {
+		events, err := c.eventXAddr(ctx, deviceService)
+		if err != nil {
+			last = err
+			continue
+		}
+		normalized, err := normalizeEndpointHost(events, deviceService)
+		if err != nil {
+			last = err
+			continue
+		}
+		return normalized, nil
+	}
+	if last == nil {
+		last = errors.New("la cámara no publicó el servicio de eventos")
+	}
+	return "", last
+}
+
 func (c *Client) profiles(ctx context.Context, endpoint string) ([]Profile, error) {
 	body := `<trt:GetProfiles xmlns:trt="http://www.onvif.org/ver10/media/wsdl"/>`
 	raw, err := c.soap(ctx, endpoint, "http://www.onvif.org/ver10/media/wsdl/GetProfiles", body)
@@ -274,98 +347,12 @@ func (c *Client) streamURI(ctx context.Context, endpoint, token string) (string,
 	return "", errors.New("respuesta sin Uri")
 }
 
-func (c *Client) snapshotURI(ctx context.Context, endpoint, token string) (string, error) {
-	body := `<trt:GetSnapshotUri xmlns:trt="http://www.onvif.org/ver10/media/wsdl"><trt:ProfileToken>` + xmlEscape(token) + `</trt:ProfileToken></trt:GetSnapshotUri>`
-	raw, err := c.soap(ctx, endpoint, "http://www.onvif.org/ver10/media/wsdl/GetSnapshotUri", body)
-	if err != nil {
-		return "", err
-	}
-	dec := xml.NewDecoder(bytes.NewReader(raw))
-	for {
-		tok, err := dec.Token()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return "", err
-		}
-		if se, ok := tok.(xml.StartElement); ok && se.Name.Local == "Uri" {
-			var value string
-			if err := dec.DecodeElement(&value, &se); err == nil {
-				return strings.TrimSpace(value), nil
-			}
-		}
-	}
-	return "", errors.New("respuesta sin Snapshot Uri")
-}
-
-// FetchSnapshot retrieves a JPEG snapshot using HTTP Basic or Digest auth.
-func (c *Client) FetchSnapshot(ctx context.Context, rawURL string, maxBytes int64) ([]byte, string, error) {
-	if maxBytes < 1 {
-		maxBytes = 8 << 20
-	}
-	send := func(auth string) (*http.Response, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Accept", "image/jpeg,image/*;q=0.8")
-		if auth != "" {
-			req.Header.Set("Authorization", auth)
-		}
-		return c.HTTP.Do(req)
-	}
-	resp, err := send("")
-	if err != nil {
-		return nil, "", err
-	}
-	if resp.StatusCode == http.StatusUnauthorized {
-		challenge := resp.Header.Get("WWW-Authenticate")
-		_ = resp.Body.Close()
-		auth := ""
-		lower := strings.ToLower(challenge)
-		switch {
-		case strings.HasPrefix(lower, "digest "):
-			parsed, parseErr := parseDigestChallenge(challenge)
-			if parseErr != nil {
-				return nil, "", parseErr
-			}
-			u, parseErr := url.Parse(rawURL)
-			if parseErr != nil {
-				return nil, "", parseErr
-			}
-			auth, parseErr = digestAuthorization(parsed, http.MethodGet, u.RequestURI(), c.Username, c.Password)
-			if parseErr != nil {
-				return nil, "", parseErr
-			}
-		case strings.HasPrefix(lower, "basic "):
-			auth = "Basic " + base64.StdEncoding.EncodeToString([]byte(c.Username+":"+c.Password))
-		default:
-			return nil, "", errors.New("método de autenticación de snapshot no soportado")
-		}
-		resp, err = send(auth)
-		if err != nil {
-			return nil, "", err
-		}
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return nil, "", fmt.Errorf("snapshot HTTP %d: %s", resp.StatusCode, compact(data))
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
-	if err != nil {
-		return nil, "", err
-	}
-	if int64(len(data)) > maxBytes {
-		return nil, "", errors.New("snapshot supera el tamaño permitido")
-	}
-	contentType := strings.TrimSpace(strings.Split(resp.Header.Get("Content-Type"), ";")[0])
-	return data, contentType, nil
-}
-
 func (c *Client) soap(ctx context.Context, endpoint, action, body string) ([]byte, error) {
-	envelope, err := c.envelope(body)
+	return c.soapWithHeader(ctx, endpoint, action, body, "")
+}
+
+func (c *Client) soapWithHeader(ctx context.Context, endpoint, action, body, extraHeader string) ([]byte, error) {
+	envelope, err := c.envelopeWithHeader(body, extraHeader)
 	if err != nil {
 		return nil, err
 	}
@@ -430,7 +417,11 @@ func (c *Client) soap(ctx context.Context, endpoint, action, body string) ([]byt
 }
 
 func (c *Client) envelope(body string) ([]byte, error) {
-	header := ""
+	return c.envelopeWithHeader(body, "")
+}
+
+func (c *Client) envelopeWithHeader(body, extraHeader string) ([]byte, error) {
+	headerContent := strings.TrimSpace(extraHeader)
 	if c.Username != "" {
 		nonce := make([]byte, 20)
 		if _, err := rand.Read(nonce); err != nil {
@@ -442,7 +433,15 @@ func (c *Client) envelope(body string) ([]byte, error) {
 		_, _ = h.Write([]byte(created))
 		_, _ = h.Write([]byte(c.Password))
 		digest := base64.StdEncoding.EncodeToString(h.Sum(nil))
-		header = `<s:Header><wsse:Security s:mustUnderstand="1" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd" xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd"><wsse:UsernameToken><wsse:Username>` + xmlEscape(c.Username) + `</wsse:Username><wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordDigest">` + digest + `</wsse:Password><wsse:Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary">` + base64.StdEncoding.EncodeToString(nonce) + `</wsse:Nonce><wsu:Created>` + created + `</wsu:Created></wsse:UsernameToken></wsse:Security></s:Header>`
+		security := `<wsse:Security s:mustUnderstand="1" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd" xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd"><wsse:UsernameToken><wsse:Username>` + xmlEscape(c.Username) + `</wsse:Username><wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordDigest">` + digest + `</wsse:Password><wsse:Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary">` + base64.StdEncoding.EncodeToString(nonce) + `</wsse:Nonce><wsu:Created>` + created + `</wsu:Created></wsse:UsernameToken></wsse:Security>`
+		if headerContent != "" {
+			headerContent += "\n"
+		}
+		headerContent += security
+	}
+	header := ""
+	if headerContent != "" {
+		header = `<s:Header>` + headerContent + `</s:Header>`
 	}
 	return []byte(`<?xml version="1.0" encoding="UTF-8"?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope">` + header + `<s:Body>` + body + `</s:Body></s:Envelope>`), nil
 }

@@ -21,6 +21,7 @@ Fragata administra credenciales de cámaras, sesiones y archivos de video. El de
 - Rate limit por IP y pareja IP/usuario, bloqueo temporal, `Retry-After` y memoria acotada.
 - Cabeceras CSP, anti-framing, `nosniff`, política de permisos, aislamiento de origen y HSTS cuando se usan cookies seguras.
 - Rutas de grabación confinadas al directorio configurado, sin traversal ni enlaces simbólicos.
+- Suscripciones ONVIF PullPoint limitadas al host configurado para la cámara, con timeouts, cancelación y reconexión acotada.
 - Límite global de procesos FFmpeg para reproducción histórica.
 - Entrypoint root mínimo con solo `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETUID` y `SETGID`; después ejecuta `tini` y Fragata como UID/GID no root sin conservar capabilities ni dejar un proceso root residente.
 - `no-new-privileges`, raíz de solo lectura y verificación real de escritura sobre los bind mounts antes de iniciar.
@@ -36,7 +37,7 @@ No elimine `cap_drop: ALL` ni añada capacidades distintas de las cinco declarad
 
 Solo deben ser escribibles y persistentes:
 
-- `/data`: estado, clave de cifrado, capturas de eventos y `logs.txt`.
+- `/data`: estado, clave de cifrado, miniaturas históricas de eventos y `logs.txt`.
 - `/recordings`: segmentos MKV locales.
 - `/tmp`: almacenamiento temporal en memoria, sin ejecución y no persistente.
 
@@ -48,3 +49,4 @@ Las llaves SFTP se montan aparte como solo lectura en `/run/secrets/fragata`.
 - El rate limit vive en memoria y se reinicia junto con el proceso. El servicio está diseñado para una sola instancia; varias réplicas necesitan un limitador compartido en el proxy.
 - Bootstrap y Bootstrap Icons aún se obtienen desde jsDelivr. Sus hojas y scripts tienen SRI y la CSP limita el origen, pero una instalación completamente aislada debe empaquetar esos recursos localmente.
 - H.265 se convierte a H.264 durante la reproducción web y puede consumir CPU. Ajuste `FRAGATA_MAX_TRANSCODES` al hardware disponible.
+- Fragata depende de las capacidades de eventos del firmware. La sensibilidad, zonas y clasificación se configuran en la cámara; un dispositivo sin ONVIF Events PullPoint no puede generar eventos en Fragata.

@@ -1,15 +1,5 @@
 # Avisos de terceros
 
-## Coeficientes HOG/SVM para detección de personas
+Fragata 0.9.3 ya no incorpora coeficientes HOG/SVM, modelos de detección ni código derivado de OpenCV.
 
-Fragata incluye dentro del código los coeficientes del detector humano HOG/SVM predeterminado expuesto por OpenCV mediante `HOGDescriptor::getDefaultPeopleDetector()`.
-
-Estos coeficientes se usan únicamente como datos numéricos por una implementación propia escrita en Go. Fragata no enlaza, carga ni distribuye binarios de OpenCV.
-
-OpenCV 4.x se distribuye bajo la licencia Apache License 2.0. El texto de esa licencia puede consultarse en:
-
-```text
-https://www.apache.org/licenses/LICENSE-2.0
-```
-
-Copyright de OpenCV y sus contribuidores según corresponda al proyecto original.
+Las dependencias Go utilizadas por el proyecto y sus versiones se declaran en `go.mod` y `go.sum`. Los recursos web Bootstrap y Bootstrap Icons se cargan desde jsDelivr con versiones fijas y comprobación SRI.

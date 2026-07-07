@@ -1,3 +1,5 @@
+> **Obsoleto desde Fragata 0.9.3:** este documento conserva la historia de la implementación anterior. El detector local y `internal/detection/` fueron eliminados; los eventos nuevos provienen exclusivamente de ONVIF Events PullPoint.
+
 # Fecha
 
 2026-07-05
@@ -37,7 +39,7 @@ Cada worker de cámara mantiene un runner de detección independiente y cancelab
 - Biblioteca estándar: `image`, `image/jpeg`, `image/png`, `net/http`, `math`, `context` y utilidades de archivos.
 - Cliente ONVIF interno de Fragata para `GetSnapshotUri` y autenticación Basic/Digest.
 - No se agregaron dependencias Go nuevas.
-- Los coeficientes HOG/SVM predeterminados de OpenCV están embebidos como datos y documentados en `THIRD_PARTY_NOTICES.md`.
+- Históricamente, los coeficientes HOG/SVM se documentaron en `THIRD_PARTY_NOTICES.md`; ya no forman parte del código desde 0.9.3.
 
 # Archivos importantes modificados
 

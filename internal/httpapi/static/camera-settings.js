@@ -43,21 +43,7 @@
     q('#deviceStream').textContent = `${camera.codec || '—'}${camera.width && camera.height ? ` · ${camera.width}×${camera.height}` : ''}`;
     q('#deviceLiveStream').textContent = `${camera.live_codec || camera.codec || '—'}${camera.live_width && camera.live_height ? ` · ${camera.live_width}×${camera.live_height}` : ''}`;
     q('#deviceAudio').textContent = camera.audio_codec ? `${camera.audio_codec} · ${camera.audio_sample_rate || '—'} Hz` : 'No detectado';
-    q('#snapshotURL').value = camera.snapshot_url || '';
     q('#detectionEnabled').checked = Boolean(camera.detection_enabled);
-    q('#detectMotion').checked = camera.detect_motion !== false;
-    q('#detectPerson').checked = Boolean(camera.detect_person);
-    q('#motionSensitivity').value = camera.motion_sensitivity || 65;
-    q('#motionSensitivityValue').textContent = `${q('#motionSensitivity').value}%`;
-    const interval = String(camera.detection_interval_seconds || 1);
-    if (![...q('#detectionInterval').options].some((option) => option.value === interval)) q('#detectionInterval').add(new Option(`Cada ${interval} segundos`, interval));
-    q('#detectionInterval').value = interval;
-    q('#personConfidence').value = camera.person_confidence || 55;
-    q('#personConfidenceValue').textContent = `${q('#personConfidence').value}%`;
-    q('#detectionCooldown').value = camera.detection_cooldown_seconds || 30;
-    const zone = camera.detection_zone || { x: 0, y: 0, width: 100, height: 100 };
-    q('#zoneX').value = zone.x ?? 0; q('#zoneY').value = zone.y ?? 0; q('#zoneWidth').value = zone.width || 100; q('#zoneHeight').value = zone.height || 100;
-    updateDetectionVisibility();
     q('fragata-app-layout')?.setSubtitle(`${camera.name} · Configuración`);
   }
 
@@ -73,30 +59,12 @@
       upload: q('#uploadSwitch').checked,
       sftp_profile_id: q('#sftpProfile').value,
       segment_duration_seconds: q('#segmentDurationPicker').valueSeconds,
-      snapshot_url: q('#snapshotURL').value.trim(),
       detection_enabled: q('#detectionEnabled').checked,
-      detect_motion: q('#detectMotion').checked,
-      detect_person: q('#detectPerson').checked,
-      motion_sensitivity: Number(q('#motionSensitivity').value),
-      detection_interval_seconds: Number(q('#detectionInterval').value),
-      person_confidence: Number(q('#personConfidence').value),
-      detection_cooldown_seconds: Number(q('#detectionCooldown').value),
-      detection_zone: { x: Number(q('#zoneX').value), y: Number(q('#zoneY').value), width: Number(q('#zoneWidth').value), height: Number(q('#zoneHeight').value) },
     };
     const password = q('#cameraPassword').value;
     if (password) data.password = password;
     return data;
   }
-
-  function updateDetectionVisibility() {
-    const enabled = q('#detectionEnabled').checked;
-    q('#detectionOptions').classList.toggle('detection-options-disabled', !enabled);
-    qa('#detectionOptions input, #detectionOptions select').forEach((input) => { input.disabled = !enabled; });
-  }
-
-  q('#detectionEnabled').addEventListener('change', updateDetectionVisibility);
-  q('#motionSensitivity').addEventListener('input', (event) => { q('#motionSensitivityValue').textContent = `${event.currentTarget.value}%`; });
-  q('#personConfidence').addEventListener('input', (event) => { q('#personConfidenceValue').textContent = `${event.currentTarget.value}%`; });
 
   qa('[data-password-toggle]').forEach((button) => button.addEventListener('click', () => {
     const input = q(button.dataset.passwordToggle);

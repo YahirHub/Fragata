@@ -1,8 +1,8 @@
 # Fragata
 
-Fragata es un servidor de cámaras IP escrito en Go. Detecta dispositivos ONVIF, elige el stream RTSP de mayor resolución para grabarlo sin recomprimir, guarda video H.264/H.265 y audio compatible en segmentos MKV, ofrece vista en vivo mediante WebRTC, puede subir grabaciones terminadas por SFTP y detecta movimiento y personas localmente mediante snapshots.
+Fragata es un servidor de cámaras IP escrito en Go. Detecta dispositivos ONVIF, elige el stream RTSP de mayor resolución para grabarlo sin recomprimir, guarda video H.264/H.265 y audio compatible en segmentos MKV, ofrece vista en vivo mediante WebRTC, puede subir grabaciones terminadas por SFTP y registra los eventos ONVIF nativos emitidos por cada cámara.
 
-El núcleo sigue siendo un único binario compilable con `CGO_ENABLED=0` y frontend embebido. La detección utiliza código Go puro y pesos HOG/SVM embebidos: no requiere Python, OpenCV, ONNX Runtime, archivos de modelo ni servicios externos. FFmpeg sigue siendo opcional para el binario nativo, pero habilita la normalización de video, la conversión de audio y la reproducción histórica compatible con navegadores. El archivo MKV conserva siempre el video y audio originales de la cámara.
+El núcleo sigue siendo un único binario compilable con `CGO_ENABLED=0` y frontend embebido. Fragata no analiza snapshots ni ejecuta un detector local de movimiento o personas: crea una suscripción ONVIF PullPoint y conserva las alertas que la propia cámara genera. FFmpeg sigue siendo opcional para el binario nativo, pero habilita la normalización de video, la conversión de audio y la reproducción histórica compatible con navegadores. El archivo MKV conserva siempre el video y audio originales de la cámara.
 
 ## Estado del MVP
 
@@ -39,11 +39,11 @@ Incluido:
 - API HTTP y frontend propio embebido en el binario; únicamente Bootstrap y Bootstrap Icons se cargan desde CDN.
 - Docker, Compose con red LAN del host, systemd y scripts de compilación estática.
 - Diagnóstico de puertos desde el mismo proceso que intenta abrir la cámara.
-- Descubrimiento automático de `GetSnapshotUri` mediante ONVIF y validación de una URL HTTP(S) manual cuando la cámara no la publica.
-- Detección de movimiento en Go puro mediante diferencia de imágenes pequeñas, compensación de iluminación y confirmación temporal.
-- Confirmación humana beta mediante HOG/SVM embebido, ejecutada solo después de detectar movimiento para reducir consumo.
-- Configuración por cámara de sensibilidad, intervalo, confianza humana, enfriamiento y zona rectangular de análisis.
-- Página de eventos con miniaturas originales, filtros por cámara y tipo, vínculo al segmento MKV y reproducción desde el instante detectado.
+- Suscripción nativa al servicio de eventos ONVIF mediante PullPoint, sin URL de snapshot, análisis local ni modelos embebidos.
+- Activación por cámara con un único interruptor y verificación real de `CreatePullPointSubscription` antes de guardar.
+- Clasificación compatible de eventos de movimiento, persona y tópicos ONVIF específicos del fabricante.
+- Reconexión automática de la suscripción, renovación antes de vencer y deduplicación temporal de notificaciones repetidas.
+- Página de eventos con filtros por cámara y tipo, tópico ONVIF, vínculo al segmento MKV y reproducción desde el instante detectado.
 - Videoteca local con filtro por cámara y día, días disponibles, lista cronológica paginada, descarga del MKV original y línea de tiempo horizontal de 24 horas con carriles separados y eventos agrupados.
 - Reproducción histórica desde cualquier segundo del segmento, detección del códec real mediante FFprobe y límite global de transcodificaciones.
 
@@ -51,7 +51,7 @@ No incluido todavía:
 
 - Transcodificación general de codecs de audio distintos de G.711, Opus y AAC.
 - Entrada mediante protocolo SRT. Las cámaras ONVIF normalmente entregan la transmisión por RTSP; SRT se añadirá como transporte independiente.
-- Clasificación avanzada de mascotas, vehículos, rostros o personas pequeñas/ocultas mediante redes neuronales.
+- Clasificación adicional que la cámara no publique por ONVIF. Fragata registra las categorías que el firmware del dispositivo emite.
 
 ## Requisitos
 
@@ -137,8 +137,8 @@ La administración está separada en rutas claras:
 - `/cameras/new`: alta y detección de una cámara.
 - `/cameras/<id>/settings`: identidad, carpeta, red, credenciales, grabación y SFTP.
 - `/camera/<id>`: visor en vivo con audio opcional, recuperación tras reinicios, modo monitor y pantalla completa.
-- `/events`: eventos de movimiento y persona con miniaturas y filtros.
-- `/events/{id}`: detalle del evento, captura original y reproducción histórica vinculada.
+- `/events`: eventos ONVIF de movimiento, persona o fabricante, con filtros y acceso a la grabación relacionada.
+- `/events/{id}`: detalle del evento, tópico ONVIF, miniatura histórica cuando existe y reproducción vinculada.
 - `/recordings`: videos locales por cámara y día, reproductor y línea de tiempo de 24 horas.
 - `/settings/sftp`: servidores SFTP globales reutilizables.
 - `/settings/storage`: política de retención y estado del registro local.
@@ -153,7 +153,7 @@ Bootstrap 5.3.8 y Bootstrap Icons 1.13.1 se cargan desde jsDelivr con versión f
 
 ## Administrar cámaras
 
-El listado de cámaras usa un menú de tres puntos por fila para abrir el visor, consultar eventos, modificar ajustes, redetectar perfiles, iniciar o detener la grabación y eliminar el registro. La página de ajustes permite cambiar nombre, carpeta, IP o dominio, usuario, contraseña, URL RTSP, estado, duración, subida SFTP, servidor global asignado y parámetros de detección.
+El listado de cámaras usa un menú de tres puntos por fila para abrir el visor, consultar eventos, modificar ajustes, redetectar perfiles, iniciar o detener la grabación y eliminar el registro. La página de ajustes permite cambiar nombre, carpeta, IP o dominio, usuario, contraseña, URL RTSP, estado, duración, subida SFTP, servidor global asignado y la suscripción a eventos ONVIF.
 
 El visor comienza silenciado porque los navegadores bloquean la reproducción automática con sonido. Cuando la cámara ofrece audio compatible, aparece el botón **Activar sonido**; la acción del usuario habilita la pista sin reiniciar el video.
 
@@ -161,45 +161,26 @@ El supervisor del visor consulta `/healthz` de forma independiente. Si el proces
 
 Al cambiar IP, usuario, contraseña o URL RTSP, Fragata prueba la nueva configuración antes de guardarla. Una contraseña vacía conserva la credencial cifrada actual. Cambiar la carpeta afecta únicamente a nuevas grabaciones y no mueve los archivos existentes.
 
-## Detección local de movimiento y personas
+## Eventos ONVIF nativos
 
-La detección es opcional y se configura por cámara desde **Ajustes → Detección**. Fragata intenta obtener automáticamente una URL JPEG mediante ONVIF `GetSnapshotUri`. Cuando una cámara no publica esa capacidad, puede introducirse manualmente una URL HTTP o HTTPS de snapshot perteneciente al mismo host configurado.
+Los eventos son opcionales y se activan por cámara desde **Ajustes → Eventos ONVIF nativos**. Solo existe un interruptor: no se solicita una URL de snapshot, sensibilidad, intervalo, zona ni modelo de detección.
 
-Flujo de análisis:
+Al activarlos, Fragata:
 
-```text
-Snapshot reducido a 160×90
-        ↓
-Movimiento por diferencia de imagen
-        ↓ solo cuando existe actividad
-Detector humano HOG/SVM sobre una imagen acotada
-        ↓
-Evento, confianza y miniatura
-```
+1. descubre el servicio ONVIF de eventos de la cámara;
+2. crea una suscripción PullPoint real para validar compatibilidad;
+3. ejecuta `PullMessages` de forma continua;
+4. renueva la suscripción antes de que venza;
+5. se reconecta automáticamente cuando la cámara o la red se interrumpen;
+6. guarda el tópico ONVIF y enlaza el evento con el segmento MKV activo.
 
-Parámetros disponibles:
+La sensibilidad, zonas, detección humana, cruce de línea u otras reglas se configuran en la aplicación o panel propio de la cámara. Fragata no intenta sustituir esas funciones: registra exactamente las alertas que el firmware publica. Los tópicos comunes se presentan como **Movimiento** o **Persona**; cualquier tópico válido específico del fabricante se conserva como **Evento ONVIF**.
 
-- Activar o desactivar la detección sin afectar grabación ni vista en vivo.
-- Detectar movimiento y, opcionalmente, confirmar persona.
-- Sensibilidad de movimiento entre 1 y 100.
-- Intervalo de análisis entre 1 y 60 segundos.
-- Confianza humana entre 40 % y 95 %.
-- Tiempo de enfriamiento entre eventos.
-- Zona rectangular normalizada para ignorar áreas irrelevantes.
+Una cámara debe publicar el servicio ONVIF Events y admitir suscripciones PullPoint. Cuando no lo admite, Fragata rechaza la activación con un error claro y no pide ninguna URL alternativa.
 
-El detector humano está diseñado para cuerpos erguidos y visibles. Es una función beta: puede omitir personas pequeñas, parcialmente ocultas o tomadas desde ángulos extremos, y puede producir falsos positivos. La detección de movimiento continúa funcionando aunque la confirmación humana no encuentre una persona.
+Al iniciar por primera vez, `state.json` se migra a la versión 4 y se eliminan únicamente los campos obsoletos del detector local. Los eventos históricos creados por versiones anteriores continúan siendo compatibles. Si ya tienen una miniatura en `data/events/`, esta puede seguir viéndose y será eliminada por la política global de retención. Los eventos ONVIF nuevos no descargan ni generan snapshots locales.
 
-Para activarla en una cámara ya guardada:
-
-1. Ejecuta **Redetectar calidad** para que Fragata vuelva a consultar perfiles y snapshot ONVIF.
-2. Abre **Ajustes** y activa **Detección**.
-3. Verifica o introduce la URL de snapshot.
-4. Ajusta sensibilidad, intervalo, confianza, enfriamiento y zona.
-5. Consulta los resultados en `/events`.
-
-Las miniaturas se guardan en `data/events/` sin redimensionar ni recomprimir y se eliminan mediante la misma política global de retención. Fragata conserva las dimensiones y la proporción originales entregadas por la cámara y nunca devuelve la URL de snapshot con credenciales mediante la API.
-
-Cuando la grabación está activa, el evento almacena el segmento MKV actual y el desplazamiento temporal exacto. Desde el detalle puede abrirse el video comenzando cinco segundos antes de la detección. Si el segmento todavía está abierto, la página espera a que se cierre y habilita la reproducción automáticamente. Los eventos anteriores intentan localizar su grabación por cámara, fecha y hora.
+Cuando la grabación está activa, el evento almacena el segmento MKV actual y el desplazamiento temporal exacto. Desde el detalle puede abrirse el video comenzando cinco segundos antes del aviso. Si el segmento todavía está abierto, la página espera a que se cierre y habilita la reproducción automáticamente. Los eventos anteriores intentan localizar su grabación por cámara, fecha y hora.
 
 La reproducción histórica en navegador utiliza FFmpeg únicamente como adaptador HTTP opcional. Para H.264 conserva el video original sin recomprimir; para H.265 lo convierte a H.264 manteniendo las dimensiones originales. El MKV archivado nunca se modifica y siempre puede descargarse en su calidad original.
 
@@ -510,7 +491,7 @@ Compose elimina todas las capabilities y devuelve únicamente `CHOWN`, `DAC_OVER
 ### Montajes persistentes
 
 ```text
-./data       -> /data        state.json, secret.key, logs.txt y eventos
+./data       -> /data        state.json, secret.key, logs.txt y miniaturas históricas
 ./recordings -> /recordings  segmentos MKV visibles y respaldables desde Linux
 ./config     -> /etc/fragata/config, solo lectura
 ```
@@ -578,7 +559,7 @@ journalctl -u fragata -f
 | `DELETE` | `/api/cameras/{id}` | Eliminar configuración |
 | `POST` | `/api/discovery` | WS-Discovery ONVIF |
 | `GET` | `/api/status` | Estado de streams y grabación |
-| `GET` | `/api/events` | Listar eventos de movimiento y persona |
+| `GET` | `/api/events` | Listar eventos ONVIF de movimiento, persona o fabricante |
 | `GET` | `/api/events/{id}` | Consultar detalle, vínculo y estado de grabación del evento |
 | `GET` | `/api/events/{id}/snapshot` | Servir de forma protegida la miniatura de un evento |
 | `GET` | `/api/events/{id}/video` | Reproducir el segmento desde el instante del evento mediante MP4 fragmentado |
@@ -616,10 +597,9 @@ Antes de publicar el panel, complete la lista de [`SECURITY.md`](SECURITY.md).
 - Los identificadores de grabación codifican rutas relativas; el servidor valida contención, extensión, estructura y rechaza enlaces simbólicos antes de abrir un archivo.
 - `FRAGATA_LIVE_IDLE_TIMEOUT` apaga FFmpeg o el substream de vista cuando ya no existen espectadores.
 - El escritor H.265 debe validarse con los modelos reales que se usarán antes de considerarlo producción estable.
-- La URL de snapshot se restringe a HTTP(S) y al mismo host configurado para la cámara; las URI ONVIF se normalizan hacia ese host, se cifran en el estado local y sus parámetros sensibles se ocultan en la API.
-- Los snapshots se limitan a 8 MiB y 32 megapíxeles antes de decodificarlos para evitar consumo de memoria no acotado.
-- Las miniaturas de eventos se sirven por una ruta autenticada con comprobación de contención para impedir path traversal.
-- El detector humano no carga código nativo ni modelos externos: los pesos HOG/SVM están embebidos en el binario.
+- Los endpoints ONVIF de eventos se normalizan hacia el host configurado para impedir que una respuesta de la cámara desvíe solicitudes a otro equipo.
+- Las respuestas SOAP se procesan con límites HTTP y timeouts; la suscripción se cancela al detener el worker.
+- Las miniaturas históricas de eventos se sirven por una ruta autenticada con comprobación de contención para impedir path traversal.
 
 ## Pruebas
 
@@ -650,8 +630,9 @@ Prueba real recomendada:
 11. Crear dos perfiles SFTP, asignar uno a la cámara y confirmar creación del MKV y `.sha256` remotos.
 12. Aplicar una retención corta sobre archivos de prueba y comprobar que no elimina `.partial` ni subidas pendientes.
 13. Generar actividad y confirmar que `logs.txt` nunca supera 1 MiB.
-14. Activar detección y grabación, caminar dentro de la zona configurada y comprobar el evento, su miniatura y el vínculo temporal al MKV en `/events`.
-15. Cambiar la zona para excluir movimiento irrelevante y verificar que no se creen eventos fuera de ella.
+14. Activar **Eventos ONVIF nativos** y confirmar que la validación PullPoint termina correctamente.
+15. Generar movimiento o una regla inteligente desde la cámara y comprobar el evento, su tópico y el vínculo temporal al MKV en `/events`.
+16. Cortar temporalmente la conexión ONVIF y confirmar que la suscripción se recupera al volver la cámara.
 
 ## Estructura
 
@@ -659,11 +640,10 @@ Prueba real recomendada:
 cmd/fragata/          punto de entrada
 internal/auth/        sesiones persistentes, login y CSRF
 internal/camera/      descubrimiento, configuración y supervisión de cámaras
-internal/detection/   movimiento, HOG/SVM humano y generación de eventos en Go puro
 internal/httpapi/     API y panel web embebido
 internal/live/        access units H.264 normalizadas hacia WebRTC
 internal/matroska/    escritor MKV sin CGO
-internal/onvif/       WS-Discovery y SOAP ONVIF
+internal/onvif/       WS-Discovery, SOAP y suscripciones PullPoint de eventos
 internal/recording/   segmentación, audio y recuperación
 internal/rtsp/        conexión RTSP, sondeo de puertos y diccionario de rutas
 internal/logging/     logs.txt rotativo con límite estricto

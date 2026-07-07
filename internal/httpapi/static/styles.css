@@ -535,7 +535,6 @@ fragata-app-layout:not([data-ready="true"]), fragata-auth-layout:not([data-ready
 .event-preview-empty { width: 100%; min-height: 240px; display: grid; place-items: center; color: #77819a; font-size: 2rem; }
 .event-type-badge { position: absolute; top: .85rem; left: .85rem; box-shadow: 0 .25rem .8rem rgba(0,0,0,.2); }
 .event-metrics { display: flex; flex-wrap: wrap; gap: .65rem 1rem; color: #6c757d; font-size: .78rem; }
-.detection-options-disabled { opacity: .48; filter: grayscale(.2); transition: opacity .18s ease; }
 
 /* Event detail: original aspect ratio, full-resolution snapshot and recorded
    playback without cropping. */
@@ -557,6 +556,8 @@ fragata-app-layout:not([data-ready="true"]), fragata-auth-layout:not([data-ready
 .event-video-stage:not(.is-loading) .event-video-loading { display: none; }
 .event-snapshot-stage { width: 100%; min-height: 220px; display: grid; place-items: center; overflow: hidden; border-radius: 14px; background: #080d18; }
 .event-snapshot-stage img { display: block; width: 100%; height: auto; max-height: 78vh; object-fit: contain; object-position: center; }
+.event-snapshot-stage .event-preview-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .75rem; padding: 2rem; text-align: center; }
+.event-snapshot-stage .event-preview-empty span { font-size: .95rem; font-weight: 600; }
 .event-detail-list { display: grid; gap: 0; }
 .event-detail-list > div { display: grid; grid-template-columns: minmax(110px, .8fr) minmax(0, 1.2fr); gap: 1rem; padding: .9rem 0; border-bottom: 1px solid var(--fragata-border); }
 .event-detail-list > div:last-child { border-bottom: 0; }
@@ -797,6 +798,7 @@ body { overflow-x: hidden; }
 .timeline-event-track span { position: sticky; left: 12px; top: 0; display: inline-block; margin: 7px 0 0 12px; padding: .12rem .4rem; border-radius: 999px; color: #a8424c; background: var(--fragata-surface); font-size: .62rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
 .timeline-event { position: absolute; z-index: 6; width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 2px solid var(--fragata-surface); border-radius: 50%; color: #fff; background: #dc3545; box-shadow: 0 .2rem .55rem rgba(220,53,69,.32); transform: translateX(-50%); }
 .timeline-event.person { background: #6f42c1; box-shadow: 0 .2rem .55rem rgba(111,66,193,.32); }
+.timeline-event.onvif { background: #0dcaf0; box-shadow: 0 .2rem .55rem rgba(13,202,240,.32); }
 .timeline-event.cluster { width: 34px; height: 28px; border-radius: 999px; }
 .timeline-event i { font-size: .7rem; }
 .timeline-event span { font-size: .62rem; font-weight: 800; line-height: 1; }

@@ -53,17 +53,6 @@ func TestCameraPublicExposesFolderAndPasswordStateWithoutSecret(t *testing.T) {
 	}
 }
 
-func TestDetectionZoneNormalized(t *testing.T) {
-	zone := (DetectionZone{X: 90, Y: 95, Width: 50, Height: 40}).Normalized()
-	if zone.X != 90 || zone.Y != 95 || zone.Width != 10 || zone.Height != 5 {
-		t.Fatalf("zona inesperada: %#v", zone)
-	}
-	full := (DetectionZone{}).Normalized()
-	if full.Width != 100 || full.Height != 100 {
-		t.Fatalf("zona completa inesperada: %#v", full)
-	}
-}
-
 func TestRedactURLMasksSensitiveQueryValues(t *testing.T) {
 	got := RedactURL("http://192.168.1.20/snapshot.jpg?channel=1&token=abc123&session_id=private")
 	if strings.Contains(got, "abc123") || strings.Contains(got, "private") {

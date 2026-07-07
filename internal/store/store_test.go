@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -82,8 +83,8 @@ func TestStorePersistsDetectionEvents(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	event := model.DetectionEvent{
-		ID: "event-1", CameraID: "cam-1", CameraName: "Entrada", Type: "person", Confidence: .81,
-		SnapshotPath: "events/entrada/event.jpg", SnapshotWidth: 2304, SnapshotHeight: 1296,
+		ID: "event-1", CameraID: "cam-1", CameraName: "Entrada", Type: "person",
+		Source: "onvif", ONVIFTopic: "tns1:RuleEngine/PeopleDetector/Person",
 		RecordingPath: "entrada/2026/07/05/12-00-00.000.mkv", RecordingStartedAt: now.Add(-15 * time.Second),
 		RecordingOffsetMillis: 15000, CreatedAt: now,
 	}
@@ -95,38 +96,68 @@ func TestStorePersistsDetectionEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	events := reopened.DetectionEvents("cam-1", 10)
-	if len(events) != 1 || events[0].ID != event.ID || events[0].SnapshotPath != event.SnapshotPath ||
-		events[0].RecordingPath != event.RecordingPath || events[0].RecordingOffsetMillis != event.RecordingOffsetMillis ||
-		events[0].SnapshotWidth != event.SnapshotWidth || events[0].SnapshotHeight != event.SnapshotHeight {
-		t.Fatalf("evento no recuperado: %#v", events)
+	if len(events) != 1 || events[0].ID != event.ID || events[0].Source != "onvif" ||
+		events[0].ONVIFTopic != event.ONVIFTopic || events[0].RecordingPath != event.RecordingPath ||
+		events[0].RecordingOffsetMillis != event.RecordingOffsetMillis {
+		t.Fatalf("evento ONVIF no recuperado: %#v", events)
 	}
 }
 
-func TestStorePersistsEncryptedSnapshotURL(t *testing.T) {
+func TestStoreMigratesLegacyDetectorFieldsWithoutDeletingHistory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
-	key := bytes.Repeat([]byte{10}, 32)
-	state, err := Open(path, key)
+	legacy := `{
+  "version": 3,
+  "cameras": {
+    "cam-1": {
+      "id": "cam-1",
+      "name": "Entrada",
+      "host": "192.168.1.20",
+      "rtsp_url": "rtsp://192.168.1.20/live",
+      "folder_name": "entrada",
+      "enabled": true,
+      "record": true,
+      "segment_duration_seconds": 300,
+      "detection_enabled": true,
+      "snapshot_url": "http://192.168.1.20/snapshot.jpg",
+      "detect_motion": true,
+      "motion_sensitivity": 50
+    }
+  },
+  "events": {
+    "old-event": {
+      "id": "old-event",
+      "camera_id": "cam-1",
+      "camera_name": "Entrada",
+      "type": "motion",
+      "snapshot_path": "events/entrada/old.jpg",
+      "created_at": "2026-07-01T12:00:00Z"
+    }
+  }
+}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state, err := Open(path, bytes.Repeat([]byte{7}, 32))
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Now().UTC()
-	snapshotURL := "http://192.168.1.30/snapshot.jpg?token=snapshot-secret"
-	if err := state.SaveCamera(model.Camera{ID: "cam-snapshot", Name: "Entrada", SnapshotURL: snapshotURL, CreatedAt: now, UpdatedAt: now}); err != nil {
-		t.Fatal(err)
+	camera, ok := state.Camera("cam-1")
+	if !ok || !camera.DetectionEnabled {
+		t.Fatalf("native ONVIF event flag was not preserved: %#v", camera)
 	}
-	raw, err := os.ReadFile(path)
+	events := state.DetectionEvents("cam-1", 10)
+	if len(events) != 1 || events[0].SnapshotPath != "events/entrada/old.jpg" {
+		t.Fatalf("historical event was not preserved: %#v", events)
+	}
+	rewritten, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(raw, []byte(snapshotURL)) || bytes.Contains(raw, []byte("snapshot-secret")) {
-		t.Fatal("la URL de snapshot quedó en texto plano")
+	text := string(rewritten)
+	if strings.Contains(text, "snapshot_url") || strings.Contains(text, "detect_motion") || strings.Contains(text, "motion_sensitivity") {
+		t.Fatalf("obsolete detector fields survived migration: %s", text)
 	}
-	reopened, err := Open(path, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	camera, ok := reopened.Camera("cam-snapshot")
-	if !ok || camera.SnapshotURL != snapshotURL {
-		t.Fatalf("snapshot no recuperado: %#v", camera)
+	if !strings.Contains(text, `"version": 4`) {
+		t.Fatalf("state version was not migrated: %s", text)
 	}
 }

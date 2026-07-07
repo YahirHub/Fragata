@@ -38,8 +38,7 @@ type diskState struct {
 
 type encryptedCamera struct {
 	model.Camera
-	PasswordCipher    string `json:"password_cipher,omitempty"`
-	SnapshotURLCipher string `json:"snapshot_url_cipher,omitempty"`
+	PasswordCipher string `json:"password_cipher,omitempty"`
 }
 
 type encryptedSFTPProfile struct {
@@ -55,7 +54,7 @@ func Open(path string, key []byte) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{path: path, key: append([]byte(nil), key...)}
-	s.data = model.State{Version: 3, Cameras: map[string]model.Camera{}, Sessions: map[string]model.Session{}, UploadQueue: map[string]model.UploadJob{}, SFTPProfiles: map[string]model.SFTPProfile{}, Retention: model.RetentionPolicy{Value: 30, Unit: "days"}, Events: map[string]model.DetectionEvent{}}
+	s.data = model.State{Version: 4, Cameras: map[string]model.Camera{}, Sessions: map[string]model.Session{}, UploadQueue: map[string]model.UploadJob{}, SFTPProfiles: map[string]model.SFTPProfile{}, Retention: model.RetentionPolicy{Value: 30, Unit: "days"}, Events: map[string]model.DetectionEvent{}}
 	if err := s.load(); err != nil {
 		return nil, err
 	}
@@ -89,9 +88,10 @@ func (s *Store) load() error {
 	if d.Events == nil {
 		d.Events = map[string]model.DetectionEvent{}
 	}
+	migrated := d.Version < 4
 	state := model.State{Version: d.Version, Cameras: map[string]model.Camera{}, Sessions: d.Sessions, UploadQueue: d.UploadQueue, SFTPProfiles: map[string]model.SFTPProfile{}, Retention: d.Retention, Events: d.Events}
-	if state.Version < 3 {
-		state.Version = 3
+	if state.Version < 4 {
+		state.Version = 4
 	}
 	if state.Retention.Value < 1 || (state.Retention.Unit != "days" && state.Retention.Unit != "months" && state.Retention.Unit != "years") {
 		state.Retention = model.RetentionPolicy{Value: 30, Unit: "days"}
@@ -104,13 +104,6 @@ func (s *Store) load() error {
 				return fmt.Errorf("descifrar contraseña de cámara %s: %w", id, err)
 			}
 			c.Password = plain
-		}
-		if ec.SnapshotURLCipher != "" {
-			plain, err := s.decrypt(ec.SnapshotURLCipher)
-			if err != nil {
-				return fmt.Errorf("descifrar snapshot de cámara %s: %w", id, err)
-			}
-			c.SnapshotURL = plain
 		}
 		state.Cameras[id] = c
 	}
@@ -126,6 +119,11 @@ func (s *Store) load() error {
 		state.SFTPProfiles[id] = profile
 	}
 	s.data = state
+	if migrated {
+		// Rewriting the state removes obsolete local-detector fields while
+		// preserving cameras, credentials, events and historical snapshots.
+		return s.persistLocked()
+	}
 	return nil
 }
 
@@ -453,20 +451,12 @@ func (s *Store) persistLocked() error {
 	for id, c := range s.data.Cameras {
 		ec := encryptedCamera{Camera: c}
 		ec.Password = ""
-		ec.SnapshotURL = ""
 		if c.Password != "" {
 			enc, err := s.encrypt(c.Password)
 			if err != nil {
 				return err
 			}
 			ec.PasswordCipher = enc
-		}
-		if c.SnapshotURL != "" {
-			enc, err := s.encrypt(c.SnapshotURL)
-			if err != nil {
-				return err
-			}
-			ec.SnapshotURLCipher = enc
 		}
 		d.Cameras[id] = ec
 	}

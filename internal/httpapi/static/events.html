@@ -5,15 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#4e73df">
   <title>Eventos · Fragata</title>
-  <script src="/static/theme.js?v=0.9.2"></script>
+  <script src="/static/theme.js?v=0.9.3"></script>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css" integrity="sha384-CK2SzKma4jA5H/MXDUU7i1TqZlCFaD4T01vtyDFvPlD97JQyS+IsSh1nI2EFbpyk" crossorigin="anonymous">
-  <link rel="stylesheet" href="/static/styles.css?v=0.9.2">
+  <link rel="stylesheet" href="/static/styles.css?v=0.9.3">
 </head>
 <body>
   <fragata-app-layout page-title="Eventos" page-icon="bi-activity" active="events">
     <section class="page-heading">
-      <div><span class="section-kicker">Actividad inteligente</span><h2>Movimiento y personas</h2><p>Consulta las detecciones registradas por las cámaras y sus miniaturas.</p></div>
+      <div><span class="section-kicker">Actividad de cámaras</span><h2>Eventos ONVIF</h2><p>Consulta los avisos nativos enviados por las cámaras y abre la grabación vinculada.</p></div>
       <button id="refreshEvents" class="btn btn-outline-primary" type="button"><i class="bi bi-arrow-clockwise me-2"></i>Actualizar</button>
     </section>
 
@@ -21,7 +21,7 @@
       <div class="card-body">
         <div class="row g-3 align-items-end">
           <div class="col-12 col-md-5"><label class="form-label" for="cameraFilter">Cámara</label><select id="cameraFilter" class="form-select"><option value="">Todas las cámaras</option></select></div>
-          <div class="col-6 col-md-3"><label class="form-label" for="typeFilter">Tipo</label><select id="typeFilter" class="form-select"><option value="">Todos</option><option value="person">Persona</option><option value="motion">Movimiento</option></select></div>
+          <div class="col-6 col-md-3"><label class="form-label" for="typeFilter">Tipo</label><select id="typeFilter" class="form-select"><option value="">Todos</option><option value="person">Persona</option><option value="motion">Movimiento</option><option value="onvif">Otro evento ONVIF</option></select></div>
           <div class="col-6 col-md-2"><label class="form-label" for="limitFilter">Resultados</label><select id="limitFilter" class="form-select"><option value="50">50</option><option value="100" selected>100</option><option value="200">200</option></select></div>
           <div class="col-12 col-md-2"><div id="eventsCount" class="event-count-card"><strong>0</strong><span>eventos</span></div></div>
         </div>
@@ -29,12 +29,12 @@
     </article>
 
     <div id="eventsLoading" class="d-flex align-items-center justify-content-center gap-3 py-5 text-body-secondary"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span><span>Cargando eventos…</span></div>
-    <div id="eventsEmpty" class="empty-state hidden"><i class="bi bi-shield-check"></i><h3>Sin eventos</h3><p>No hay detecciones para los filtros seleccionados.</p></div>
+    <div id="eventsEmpty" class="empty-state hidden"><i class="bi bi-shield-check"></i><h3>Sin eventos</h3><p>No hay eventos ONVIF para los filtros seleccionados.</p></div>
     <section id="eventsGrid" class="row g-4" aria-live="polite"></section>
   </fragata-app-layout>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
-  <script src="/static/layouts.js?v=0.9.2" defer></script>
+  <script src="/static/layouts.js?v=0.9.3" defer></script>
   <script src="/static/core.js" defer></script>
-  <script src="/static/events.js" defer></script>
+  <script src="/static/events.js?v=0.9.3" defer></script>
 </body>
 </html>

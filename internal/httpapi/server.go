@@ -342,9 +342,7 @@ func (s *Server) updateCamera(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnprocessableEntity, message)
 		case strings.Contains(message, "nombre"), strings.Contains(message, "carpeta"), strings.Contains(message, "duración"),
 			strings.Contains(message, "introduzca"), strings.Contains(message, "dirección IP"), strings.Contains(message, "puerto inválido"),
-			strings.Contains(message, "obligatorio"), strings.Contains(message, "no puede superar"), strings.Contains(message, "snapshot"),
-			strings.Contains(message, "sensibilidad"), strings.Contains(message, "detección"), strings.Contains(message, "intervalo"),
-			strings.Contains(message, "confianza"), strings.Contains(message, "enfriamiento"), strings.Contains(message, "active movimiento"):
+			strings.Contains(message, "obligatorio"), strings.Contains(message, "no puede superar"):
 			writeError(w, http.StatusBadRequest, message)
 		default:
 			writeError(w, http.StatusInternalServerError, "no se pudo actualizar la cámara")
@@ -424,6 +422,17 @@ func (s *Server) probeCameraSettings(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, model.RedactSecrets(err.Error()))
 		return
+	}
+	eventsEnabled := current.DetectionEnabled
+	if request.DetectionEnabled != nil {
+		eventsEnabled = *request.DetectionEnabled
+	}
+	if eventsEnabled {
+		client := onvif.NewClient(s.cfg.ProbeTimeout, username, password, false)
+		if err := client.ProbeEventSubscription(ctx, host); err != nil {
+			writeError(w, http.StatusUnprocessableEntity, model.RedactSecrets("video correcto, pero los eventos ONVIF no están disponibles: "+err.Error()))
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"camera": detected.Camera.Public(), "detection_method": detected.Method, "diagnostics": detected.Diagnostics,

@@ -18,25 +18,38 @@
     return [hours, minutes, remaining].map((value) => String(value).padStart(2, '0')).join(':');
   }
 
+  function eventPresentation(event) {
+    if (event.type === 'person') return { label: 'Persona', icon: 'bi-person-bounding-box', badge: 'text-bg-primary' };
+    if (event.type === 'motion') return { label: 'Movimiento', icon: 'bi-broadcast-pin', badge: 'text-bg-warning' };
+    return { label: 'Evento ONVIF', icon: 'bi-shield-exclamation', badge: 'text-bg-info' };
+  }
+
   function renderMetadata(event) {
-    const isPerson = event.type === 'person';
-    const typeLabel = isPerson ? 'Persona' : 'Movimiento';
+    const presentation = eventPresentation(event);
     const badge = q('#eventType');
-    badge.className = `badge ${isPerson ? 'text-bg-primary' : 'text-bg-warning'} mb-2`;
-    badge.innerHTML = `<i class="bi ${isPerson ? 'bi-person-bounding-box' : 'bi-broadcast-pin'} me-1"></i>${typeLabel}`;
-    q('#eventTitle').textContent = `${typeLabel} en ${event.camera_name || 'cámara'}`;
+    badge.className = `badge ${presentation.badge} mb-2`;
+    badge.innerHTML = `<i class="bi ${presentation.icon} me-1"></i>${presentation.label}`;
+    q('#eventTitle').textContent = `${presentation.label} en ${event.camera_name || 'cámara'}`;
     q('#eventSubtitle').textContent = formatDate(event.created_at);
     q('#detailCamera').textContent = event.camera_name || 'Cámara';
     q('#detailDate').textContent = formatDate(event.created_at);
-    q('#detailType').textContent = typeLabel;
+    q('#detailType').textContent = presentation.label;
+    q('#detailSource').textContent = event.source === 'onvif' ? 'Eventos nativos de la cámara (ONVIF)' : 'Detección local histórica';
+    q('#detailTopic').textContent = event.onvif_topic || 'No informado';
+    q('#detailTopicRow').classList.toggle('hidden', !event.onvif_topic);
+    q('#detailMotionRow').classList.toggle('hidden', event.source === 'onvif');
+    q('#detailConfidenceRow').classList.toggle('hidden', event.source === 'onvif' || event.type !== 'person');
     q('#detailMotion').textContent = `${Math.round((event.motion_score || 0) * 1000) / 10}%`;
-    q('#detailConfidence').textContent = isPerson && event.confidence ? `${Math.round(event.confidence * 100)}%` : 'No aplica';
-    q('#detailResolution').textContent = event.snapshot_width && event.snapshot_height ? `${event.snapshot_width} × ${event.snapshot_height}` : 'Resolución original de la cámara';
+    q('#detailConfidence').textContent = event.type === 'person' && event.confidence ? `${Math.round(event.confidence * 100)}%` : 'No aplica';
+    q('#detailResolution').textContent = event.snapshot_width && event.snapshot_height ? `${event.snapshot_width} × ${event.snapshot_height}` : event.source === 'onvif' ? 'Sin snapshot local' : 'Resolución original de la cámara';
     q('#openCamera').href = `/camera/${encodeURIComponent(event.camera_id)}`;
-    document.title = `${typeLabel} · ${event.camera_name || 'Fragata'}`;
+    document.title = `${presentation.label} · ${event.camera_name || 'Fragata'}`;
 
     const snapshot = q('#eventSnapshot');
     if (event.snapshot_url) {
+      q('#snapshotKicker').textContent = 'Captura histórica';
+      q('#snapshotTitle').textContent = 'Imagen del evento';
+      q('#snapshotDescription').textContent = 'Miniatura conservada por una versión anterior de Fragata, sin recortes ni compresión adicional.';
       snapshot.src = event.snapshot_url;
       snapshot.width = Number(event.snapshot_width) || 0;
       snapshot.height = Number(event.snapshot_height) || 0;
@@ -46,6 +59,10 @@
       q('#openSnapshotOriginal').href = event.snapshot_url;
       q('#openSnapshotOriginal').classList.remove('hidden');
     } else {
+      q('#snapshotKicker').textContent = 'Evento ONVIF';
+      q('#snapshotTitle').textContent = 'Sin captura local';
+      q('#snapshotDescription').textContent = 'La alerta fue enviada por la cámara mediante ONVIF; Fragata no descarga ni analiza snapshots.';
+      q('#eventSnapshotEmptyText').textContent = 'Evento recibido por ONVIF';
       snapshot.classList.add('hidden');
       q('#eventSnapshotEmpty').classList.remove('hidden');
       q('#openSnapshotOriginal').classList.add('hidden');

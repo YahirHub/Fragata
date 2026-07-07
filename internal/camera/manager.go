@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"fragata/internal/config"
-	"fragata/internal/detection"
 	"fragata/internal/model"
+	"fragata/internal/onvif"
 	"fragata/internal/recording"
 	fragrtsp "fragata/internal/rtsp"
 	"fragata/internal/store"
@@ -191,9 +191,7 @@ func (m *Manager) Redetect(ctx context.Context, id string) (DetectionResult, err
 	enabled, record, upload := current.Enabled, current.Record, current.Upload
 	sftpProfileID := current.SFTPProfileID
 	segmentDurationSeconds := current.SegmentDurationSeconds
-	detectionEnabled, detectMotion, detectPerson := current.DetectionEnabled, current.DetectMotion, current.DetectPerson
-	motionSensitivity, detectionInterval, personConfidence, detectionCooldown := current.MotionSensitivity, current.DetectionIntervalSecs, current.PersonConfidence, current.DetectionCooldownSecs
-	detectionZone, snapshotURL := current.DetectionZone, current.SnapshotURL
+	detectionEnabled := current.DetectionEnabled
 	detected, err := Detect(ctx, m.cfg, AddRequest{
 		Name: current.Name, Host: current.Host, Username: current.Username, Password: current.Password,
 		Enabled: &enabled, Record: &record, Upload: &upload, SFTPProfileID: sftpProfileID,
@@ -207,17 +205,7 @@ func (m *Manager) Redetect(ctx context.Context, id string) (DetectionResult, err
 	updated.SegmentDurationSeconds = segmentDurationSeconds
 	updated.FolderName = current.FolderName
 	updated.SFTPProfileID = current.SFTPProfileID
-	if updated.SnapshotURL == "" {
-		updated.SnapshotURL = snapshotURL
-	}
 	updated.DetectionEnabled = detectionEnabled
-	updated.DetectMotion = detectMotion
-	updated.DetectPerson = detectPerson
-	updated.MotionSensitivity = motionSensitivity
-	updated.DetectionIntervalSecs = detectionInterval
-	updated.PersonConfidence = personConfidence
-	updated.DetectionCooldownSecs = detectionCooldown
-	updated.DetectionZone = detectionZone
 	updated.UpdatedAt = time.Now().UTC()
 	if err := m.store.SaveCamera(updated); err != nil {
 		return DetectionResult{}, err
@@ -321,22 +309,6 @@ func (m *Manager) normalizeCamera(cam model.Camera) model.Camera {
 		}
 		cam.SegmentDurationSeconds = seconds
 	}
-	if cam.MotionSensitivity < 1 || cam.MotionSensitivity > 100 {
-		cam.MotionSensitivity = 65
-	}
-	if cam.DetectionIntervalSecs < 1 || cam.DetectionIntervalSecs > 60 {
-		cam.DetectionIntervalSecs = 1
-	}
-	if cam.PersonConfidence < 40 || cam.PersonConfidence > 95 {
-		cam.PersonConfidence = 55
-	}
-	if cam.DetectionCooldownSecs < 1 || cam.DetectionCooldownSecs > 3600 {
-		cam.DetectionCooldownSecs = 30
-	}
-	cam.DetectionZone = cam.DetectionZone.Normalized()
-	if !cam.DetectMotion && !cam.DetectPerson {
-		cam.DetectMotion = true
-	}
 	return cam
 }
 
@@ -350,7 +322,7 @@ type worker struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	done            chan struct{}
-	detectionDone   chan struct{}
+	eventsDone      chan struct{}
 	mu              sync.RWMutex
 	status          model.RuntimeStatus
 	recordingMu     sync.Mutex
@@ -377,9 +349,9 @@ func (w *worker) run() {
 	defer w.stopRecorder()
 	defer w.stopLive()
 	if w.cam.DetectionEnabled {
-		w.detectionDone = make(chan struct{})
-		go w.runDetection()
-		defer func() { w.cancel(); <-w.detectionDone }()
+		w.eventsDone = make(chan struct{})
+		go w.runONVIFEvents()
+		defer func() { w.cancel(); <-w.eventsDone }()
 	} else {
 		defer w.cancel()
 	}
@@ -439,37 +411,170 @@ func (w *worker) run() {
 	}
 }
 
-func (w *worker) runDetection() {
-	defer close(w.detectionDone)
-	runner := detection.Runner{
-		Camera: w.cam, DataDir: w.cfg.DataDir, Store: w.store, Logger: w.logger,
-		RecordingSnapshot: func(at time.Time) (string, time.Time, bool) {
-			w.mu.RLock()
-			path := w.status.RecordingPath
-			startedAt := w.status.RecordingStarted
-			w.mu.RUnlock()
-			if strings.TrimSpace(path) == "" || startedAt.IsZero() || at.Before(startedAt) {
-				return "", time.Time{}, false
+func (w *worker) runONVIFEvents() {
+	defer close(w.eventsDone)
+
+	timeout := w.cfg.ProbeTimeout
+	if timeout < 30*time.Second {
+		timeout = 30 * time.Second
+	}
+	client := onvif.NewClient(timeout, w.cam.Username, w.cam.Password, false)
+	backoff := 2 * time.Second
+	lastEmitted := make(map[string]time.Time)
+
+	for w.ctx.Err() == nil {
+		w.update(func(status *model.RuntimeStatus) { status.DetectionState = "connecting" })
+		endpoint, err := client.DiscoverEventService(w.ctx, w.cam.Host)
+		if err != nil {
+			w.setONVIFEventError(err)
+			if !waitContext(w.ctx, backoff) {
+				return
 			}
-			return path, startedAt, true
-		},
-		OnStatus: func(state string, score float64, eventType string, at time.Time) {
-			w.update(func(status *model.RuntimeStatus) {
-				status.DetectionState = state
-				status.LastMotionScore = score
-				if eventType != "" {
+			backoff = nextBackoff(backoff)
+			continue
+		}
+
+		subscription, err := client.CreatePullPointSubscription(w.ctx, endpoint, 10*time.Minute)
+		if err != nil {
+			w.setONVIFEventError(err)
+			if !waitContext(w.ctx, backoff) {
+				return
+			}
+			backoff = nextBackoff(backoff)
+			continue
+		}
+		backoff = 2 * time.Second
+		w.update(func(status *model.RuntimeStatus) {
+			status.DetectionState = "listening"
+			status.DetectionError = ""
+		})
+
+		pullFailed := false
+		for w.ctx.Err() == nil {
+			if subscriptionExpiring(subscription.TerminationTime) {
+				break
+			}
+			notifications, termination, err := client.PullMessages(w.ctx, subscription, 20*time.Second, 64)
+			if err != nil {
+				if w.ctx.Err() == nil {
+					w.setONVIFEventError(err)
+					pullFailed = true
+				}
+				break
+			}
+			if !termination.IsZero() {
+				subscription.TerminationTime = termination
+			}
+			for _, notification := range notifications {
+				eventType, active, recognized, key := onvif.ClassifyEvent(notification)
+				if !recognized || !active {
+					continue
+				}
+				now := time.Now().UTC()
+				if previous := lastEmitted[key]; !previous.IsZero() && now.Sub(previous) < 30*time.Second {
+					continue
+				}
+				eventAt := validEventTime(notification.UTCTime, now)
+				if err := w.saveONVIFEvent(eventType, notification.Topic, eventAt); err != nil {
+					w.logger.Warn("could not save ONVIF event", "camera_id", w.cam.ID, "error", model.RedactSecrets(err.Error()))
+					continue
+				}
+				lastEmitted[key] = now
+				w.update(func(status *model.RuntimeStatus) {
+					status.DetectionState = "event"
 					status.LastEventType = eventType
-				}
-				if !at.IsZero() {
-					status.LastDetectionAt = at
-				}
-			})
-		},
+					status.LastDetectionAt = eventAt
+				})
+			}
+			if len(notifications) == 0 {
+				w.update(func(status *model.RuntimeStatus) {
+					if status.DetectionState != "error" {
+						status.DetectionState = "listening"
+					}
+				})
+			}
+		}
+
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = client.Unsubscribe(cleanupCtx, subscription)
+		cancel()
+		if w.ctx.Err() != nil {
+			return
+		}
+		if pullFailed {
+			if !waitContext(w.ctx, backoff) {
+				return
+			}
+			backoff = nextBackoff(backoff)
+		}
 	}
-	if err := runner.Run(w.ctx); err != nil && !errors.Is(err, context.Canceled) {
-		w.update(func(status *model.RuntimeStatus) { status.DetectionState = "error" })
-		w.logger.Warn("camera detection stopped", "camera_id", w.cam.ID, "error", model.RedactSecrets(err.Error()))
+}
+
+func (w *worker) saveONVIFEvent(eventType, topic string, eventAt time.Time) error {
+	id, err := randomID()
+	if err != nil {
+		return err
 	}
+	event := model.DetectionEvent{
+		ID: id, CameraID: w.cam.ID, CameraName: w.cam.Name, Type: eventType,
+		Source: "onvif", ONVIFTopic: strings.TrimSpace(topic), CreatedAt: eventAt,
+	}
+	w.mu.RLock()
+	path := w.status.RecordingPath
+	startedAt := w.status.RecordingStarted
+	w.mu.RUnlock()
+	if strings.TrimSpace(path) != "" && !startedAt.IsZero() && !eventAt.Before(startedAt) {
+		event.RecordingPath = strings.TrimSuffix(filepath.ToSlash(path), ".partial")
+		event.RecordingStartedAt = startedAt.UTC()
+		offset := eventAt.Sub(startedAt)
+		if offset < 0 {
+			offset = 0
+		}
+		event.RecordingOffsetMillis = offset.Milliseconds()
+	}
+	return w.store.SaveDetectionEvent(event)
+}
+
+func (w *worker) setONVIFEventError(err error) {
+	if err == nil {
+		return
+	}
+	message := model.RedactSecrets(err.Error())
+	w.update(func(status *model.RuntimeStatus) {
+		status.DetectionState = "error"
+		status.DetectionError = message
+	})
+	w.logger.Warn("ONVIF event subscription stopped", "camera_id", w.cam.ID, "error", message)
+}
+
+func subscriptionExpiring(termination time.Time) bool {
+	return !termination.IsZero() && time.Until(termination) <= 30*time.Second
+}
+
+func validEventTime(candidate, now time.Time) time.Time {
+	if candidate.IsZero() || candidate.After(now.Add(5*time.Minute)) || candidate.Before(now.Add(-24*time.Hour)) {
+		return now
+	}
+	return candidate.UTC()
+}
+
+func waitContext(ctx context.Context, duration time.Duration) bool {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func nextBackoff(current time.Duration) time.Duration {
+	current *= 2
+	if current > 30*time.Second {
+		return 30 * time.Second
+	}
+	return current
 }
 
 func (w *worker) configureRecording(enabled bool, duration time.Duration) {

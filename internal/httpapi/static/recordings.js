@@ -172,8 +172,10 @@
     });
     return [...buckets.entries()].sort((a, b) => a[0] - b[0]).map(([, entries]) => {
       const seconds = entries.reduce((sum, entry) => sum + entry.seconds, 0) / entries.length;
-      const person = entries.some((entry) => entry.event.type === 'person');
-      return { entries, seconds, person, first: entries[0].event };
+      const kind = entries.some((entry) => entry.event.type === 'person')
+        ? 'person'
+        : entries.some((entry) => entry.event.type === 'motion') ? 'motion' : 'onvif';
+      return { entries, seconds, kind, first: entries[0].event };
     });
   }
 
@@ -205,11 +207,13 @@
       const left = Math.max(17, Math.min(TIMELINE_WIDTH - 17, (cluster.seconds / 86400) * TIMELINE_WIDTH));
       const count = cluster.entries.length;
       const firstTime = formatTime(cluster.first.created_at);
+      const typeLabel = cluster.kind === 'person' ? 'Persona' : cluster.kind === 'motion' ? 'Movimiento' : 'Evento ONVIF';
+      const typeIcon = cluster.kind === 'person' ? 'bi-person-fill' : cluster.kind === 'motion' ? 'bi-activity' : 'bi-shield-exclamation';
       const title = count > 1
         ? `${count} eventos entre ${firstTime} y ${formatTime(cluster.entries[cluster.entries.length - 1].event.created_at)}`
-        : `${cluster.person ? 'Persona' : 'Movimiento'} · ${firstTime}`;
-      const contents = count > 1 ? `<span>${count > 99 ? '99+' : count}</span>` : `<i class="bi ${cluster.person ? 'bi-person-fill' : 'bi-activity'}"></i>`;
-      return `<button class="timeline-event ${cluster.person ? 'person' : 'motion'} ${count > 1 ? 'cluster' : ''}" style="left:${left}px;top:${eventTrackTop + 8}px" type="button" data-event-id="${esc(cluster.first.id)}" data-recording-id="${esc(cluster.first.recording_id || '')}" data-offset="${Number(cluster.first.offset_seconds || 0)}" title="${esc(title)}" aria-label="${esc(title)}">${contents}</button>`;
+        : `${typeLabel} · ${firstTime}`;
+      const contents = count > 1 ? `<span>${count > 99 ? '99+' : count}</span>` : `<i class="bi ${typeIcon}"></i>`;
+      return `<button class="timeline-event ${cluster.kind} ${count > 1 ? 'cluster' : ''}" style="left:${left}px;top:${eventTrackTop + 8}px" type="button" data-event-id="${esc(cluster.first.id)}" data-recording-id="${esc(cluster.first.recording_id || '')}" data-offset="${Number(cluster.first.offset_seconds || 0)}" title="${esc(title)}" aria-label="${esc(title)}">${contents}</button>`;
     }).join('');
 
     timeline.innerHTML = `${hourColumns(totalHeight)}<div class="timeline-event-track" style="top:${eventTrackTop}px;width:${TIMELINE_WIDTH}px"><span>Eventos</span></div>${recordingBars}${markers}`;

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.3 - 2026-07-07
+
+- Elimina por completo el detector local basado en snapshots, diferencia de imágenes y HOG/SVM.
+- Sustituye la detección local por suscripciones nativas ONVIF Events mediante `CreatePullPointSubscription`, `PullMessages` y `Unsubscribe`.
+- Reduce la configuración a un único interruptor **Activar eventos ONVIF**, sin URL, sensibilidad, intervalo, confianza, enfriamiento ni zona.
+- Valida la compatibilidad PullPoint antes de guardar la activación y muestra un error claro cuando la cámara no soporta el servicio.
+- Renueva y reconecta automáticamente las suscripciones, con backoff y deduplicación de notificaciones repetidas.
+- Conserva el tópico ONVIF, clasifica movimiento/persona cuando es posible y registra eventos específicos del fabricante como `onvif`.
+- Mantiene compatibles los eventos y snapshots históricos creados por versiones anteriores, sin generar nuevas capturas locales.
+- Migra `state.json` a la versión 4 y elimina al reescribir los campos obsoletos del detector local sin borrar cámaras, credenciales ni historial.
+- Elimina `internal/detection` y los avisos de terceros del antiguo detector HOG/SVM.
+
 ## 0.9.2 - 2026-07-06
 
 - Corrige `permission denied` en `/recordings` mediante un entrypoint que prepara volúmenes como root y ejecuta Fragata después con UID/GID no privilegiado.

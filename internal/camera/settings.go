@@ -1,15 +1,9 @@
 package camera
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"image"
-	_ "image/jpeg"
-	_ "image/png"
-	"net"
-	"net/url"
 	"strings"
 	"time"
 	"unicode"
@@ -20,26 +14,18 @@ import (
 )
 
 type UpdateRequest struct {
-	Name                   *string              `json:"name,omitempty"`
-	Host                   *string              `json:"host,omitempty"`
-	Username               *string              `json:"username,omitempty"`
-	Password               *string              `json:"password,omitempty"`
-	RTSPURL                *string              `json:"rtsp_url,omitempty"`
-	FolderName             *string              `json:"folder_name,omitempty"`
-	Enabled                *bool                `json:"enabled,omitempty"`
-	Record                 *bool                `json:"record,omitempty"`
-	SegmentDurationSeconds *int64               `json:"segment_duration_seconds,omitempty"`
-	Upload                 *bool                `json:"upload,omitempty"`
-	SFTPProfileID          *string              `json:"sftp_profile_id,omitempty"`
-	SnapshotURL            *string              `json:"snapshot_url,omitempty"`
-	DetectionEnabled       *bool                `json:"detection_enabled,omitempty"`
-	DetectMotion           *bool                `json:"detect_motion,omitempty"`
-	DetectPerson           *bool                `json:"detect_person,omitempty"`
-	MotionSensitivity      *int                 `json:"motion_sensitivity,omitempty"`
-	DetectionIntervalSecs  *int                 `json:"detection_interval_seconds,omitempty"`
-	PersonConfidence       *int                 `json:"person_confidence,omitempty"`
-	DetectionCooldownSecs  *int                 `json:"detection_cooldown_seconds,omitempty"`
-	DetectionZone          *model.DetectionZone `json:"detection_zone,omitempty"`
+	Name                   *string `json:"name,omitempty"`
+	Host                   *string `json:"host,omitempty"`
+	Username               *string `json:"username,omitempty"`
+	Password               *string `json:"password,omitempty"`
+	RTSPURL                *string `json:"rtsp_url,omitempty"`
+	FolderName             *string `json:"folder_name,omitempty"`
+	Enabled                *bool   `json:"enabled,omitempty"`
+	Record                 *bool   `json:"record,omitempty"`
+	SegmentDurationSeconds *int64  `json:"segment_duration_seconds,omitempty"`
+	Upload                 *bool   `json:"upload,omitempty"`
+	SFTPProfileID          *string `json:"sftp_profile_id,omitempty"`
+	DetectionEnabled       *bool   `json:"detection_enabled,omitempty"`
 }
 
 func (m *Manager) Update(ctx context.Context, id string, request UpdateRequest) (model.Camera, bool, error) {
@@ -98,40 +84,6 @@ func (m *Manager) Update(ctx context.Context, id string, request UpdateRequest) 
 	if request.DetectionEnabled != nil {
 		updated.DetectionEnabled = *request.DetectionEnabled
 	}
-	if request.DetectMotion != nil {
-		updated.DetectMotion = *request.DetectMotion
-	}
-	if request.DetectPerson != nil {
-		updated.DetectPerson = *request.DetectPerson
-	}
-	if request.MotionSensitivity != nil {
-		if *request.MotionSensitivity < 1 || *request.MotionSensitivity > 100 {
-			return model.Camera{}, false, errors.New("la sensibilidad debe estar entre 1 y 100")
-		}
-		updated.MotionSensitivity = *request.MotionSensitivity
-	}
-	if request.DetectionIntervalSecs != nil {
-		if *request.DetectionIntervalSecs < 1 || *request.DetectionIntervalSecs > 60 {
-			return model.Camera{}, false, errors.New("el intervalo de detección debe estar entre 1 y 60 segundos")
-		}
-		updated.DetectionIntervalSecs = *request.DetectionIntervalSecs
-	}
-	if request.PersonConfidence != nil {
-		if *request.PersonConfidence < 40 || *request.PersonConfidence > 95 {
-			return model.Camera{}, false, errors.New("la confianza humana debe estar entre 40 y 95")
-		}
-		updated.PersonConfidence = *request.PersonConfidence
-	}
-	if request.DetectionCooldownSecs != nil {
-		if *request.DetectionCooldownSecs < 1 || *request.DetectionCooldownSecs > 3600 {
-			return model.Camera{}, false, errors.New("el enfriamiento debe estar entre 1 y 3600 segundos")
-		}
-		updated.DetectionCooldownSecs = *request.DetectionCooldownSecs
-	}
-	if request.DetectionZone != nil {
-		zone := request.DetectionZone.Normalized()
-		updated.DetectionZone = zone
-	}
 
 	connectionChanged := false
 	rtspURLChanged := false
@@ -160,20 +112,6 @@ func (m *Manager) Update(ctx context.Context, id string, request UpdateRequest) 
 		}
 		updated.RTSPURL = rawURL
 	}
-	if request.SnapshotURL != nil {
-		rawSnapshot := strings.TrimSpace(*request.SnapshotURL)
-		if rawSnapshot == model.RedactURL(current.SnapshotURL) {
-			rawSnapshot = current.SnapshotURL
-		}
-		if rawSnapshot != "" {
-			validated, err := validateSnapshotURL(rawSnapshot, updated.Host)
-			if err != nil {
-				return model.Camera{}, false, err
-			}
-			rawSnapshot = validated
-		}
-		updated.SnapshotURL = rawSnapshot
-	}
 	if request.Password != nil && *request.Password != "" {
 		if *request.Password != current.Password {
 			connectionChanged = true
@@ -191,7 +129,7 @@ func (m *Manager) Update(ctx context.Context, id string, request UpdateRequest) 
 		detectRequest := AddRequest{
 			Name: updated.Name, Host: updated.Host, Username: updated.Username, Password: updated.Password,
 			RTSPURL: rawURL, FolderName: updated.FolderName, Enabled: &enabled, Record: &record,
-			SegmentDurationSeconds: updated.SegmentDurationSeconds, Upload: &upload, SFTPProfileID: updated.SFTPProfileID, SnapshotURL: updated.SnapshotURL,
+			SegmentDurationSeconds: updated.SegmentDurationSeconds, Upload: &upload, SFTPProfileID: updated.SFTPProfileID,
 		}
 		detected, err := Detect(ctx, m.cfg, detectRequest)
 		if err != nil && !rtspURLChanged && current.RTSPURL != "" {
@@ -211,61 +149,22 @@ func (m *Manager) Update(ctx context.Context, id string, request UpdateRequest) 
 		camera.SegmentDurationSeconds = updated.SegmentDurationSeconds
 		camera.Upload = updated.Upload
 		camera.SFTPProfileID = updated.SFTPProfileID
-		if camera.SnapshotURL == "" {
-			camera.SnapshotURL = updated.SnapshotURL
-		}
 		camera.DetectionEnabled = updated.DetectionEnabled
-		camera.DetectMotion = updated.DetectMotion
-		camera.DetectPerson = updated.DetectPerson
-		camera.MotionSensitivity = updated.MotionSensitivity
-		camera.DetectionIntervalSecs = updated.DetectionIntervalSecs
-		camera.PersonConfidence = updated.PersonConfidence
-		camera.DetectionCooldownSecs = updated.DetectionCooldownSecs
-		camera.DetectionZone = updated.DetectionZone
 		updated = camera
 		redetected = true
 	}
 
-	if updated.DetectionEnabled && updated.SnapshotURL == "" {
-		client := onvif.NewClient(m.cfg.ProbeTimeout, updated.Username, updated.Password, false)
-		inspection, err := client.Inspect(ctx, updated.Host)
-		if err == nil {
-			candidate := ""
-			if updated.ProfileToken != "" {
-				candidate = inspection.SnapshotURIs[updated.ProfileToken]
-			}
-			if candidate == "" {
-				for _, value := range inspection.SnapshotURIs {
-					candidate = value
-					break
-				}
-			}
-			if candidate != "" {
-				candidate = normalizeSnapshotHost(candidate, updated.Host)
-				if validated, validateErr := validateSnapshotURL(candidate, updated.Host); validateErr == nil {
-					updated.SnapshotURL = validated
-				}
-			}
+	// Enabling native events performs a real PullPoint handshake. No snapshot
+	// URL, sensitivity, interval, local detector or external service is used.
+	mustProbeEvents := updated.DetectionEnabled && (!current.DetectionEnabled || connectionChanged)
+	if mustProbeEvents {
+		probeTimeout := m.cfg.ProbeTimeout
+		if probeTimeout < 10*time.Second {
+			probeTimeout = 10 * time.Second
 		}
-	}
-	if updated.DetectionEnabled {
-		if updated.SnapshotURL == "" {
-			return model.Camera{}, false, errors.New("la cámara no publicó una URL de snapshot ONVIF; introdúzcala manualmente")
-		}
-		if !updated.DetectMotion && !updated.DetectPerson {
-			return model.Camera{}, false, errors.New("active movimiento o detección de personas")
-		}
-		client := onvif.NewClient(10*time.Second, updated.Username, updated.Password, false)
-		raw, _, err := client.FetchSnapshot(ctx, updated.SnapshotURL, 8<<20)
-		if err != nil {
-			return model.Camera{}, false, fmt.Errorf("no se pudo abrir el snapshot: %w", err)
-		}
-		config, _, err := image.DecodeConfig(bytes.NewReader(raw))
-		if err != nil {
-			return model.Camera{}, false, fmt.Errorf("el snapshot no contiene una imagen válida: %w", err)
-		}
-		if config.Width < 1 || config.Height < 1 || config.Width > 10000 || config.Height > 10000 || int64(config.Width)*int64(config.Height) > 32_000_000 {
-			return model.Camera{}, false, fmt.Errorf("el snapshot tiene dimensiones no permitidas: %dx%d", config.Width, config.Height)
+		client := onvif.NewClient(probeTimeout, updated.Username, updated.Password, false)
+		if err := client.ProbeEventSubscription(ctx, updated.Host); err != nil {
+			return model.Camera{}, false, fmt.Errorf("no se pudieron activar los eventos ONVIF nativos: %w", err)
 		}
 	}
 
@@ -277,10 +176,8 @@ func (m *Manager) Update(ctx context.Context, id string, request UpdateRequest) 
 		return model.Camera{}, false, err
 	}
 
-	detectionChanged := current.SnapshotURL != updated.SnapshotURL || current.DetectionEnabled != updated.DetectionEnabled || current.DetectMotion != updated.DetectMotion ||
-		current.DetectPerson != updated.DetectPerson || current.MotionSensitivity != updated.MotionSensitivity || current.DetectionIntervalSecs != updated.DetectionIntervalSecs ||
-		current.PersonConfidence != updated.PersonConfidence || current.DetectionCooldownSecs != updated.DetectionCooldownSecs || current.DetectionZone != updated.DetectionZone
-	restart := connectionChanged || detectionChanged || current.Enabled != updated.Enabled || current.FolderName != updated.FolderName || current.Upload != updated.Upload || current.SFTPProfileID != updated.SFTPProfileID
+	eventsChanged := current.DetectionEnabled != updated.DetectionEnabled
+	restart := connectionChanged || eventsChanged || current.Enabled != updated.Enabled || current.FolderName != updated.FolderName || current.Upload != updated.Upload || current.SFTPProfileID != updated.SFTPProfileID
 	if restart {
 		m.restartWorker(updated)
 	} else {
@@ -405,36 +302,5 @@ func camerasEqualForUpdate(left, right model.Camera) bool {
 		left.LiveHeight == right.LiveHeight && left.FolderName == right.FolderName && left.Enabled == right.Enabled && left.Record == right.Record &&
 		left.SegmentDurationSeconds == right.SegmentDurationSeconds && left.Upload == right.Upload && left.SFTPProfileID == right.SFTPProfileID &&
 		left.AudioCodec == right.AudioCodec && left.AudioSampleRate == right.AudioSampleRate && left.AudioChannels == right.AudioChannels &&
-		left.SnapshotURL == right.SnapshotURL && left.DetectionEnabled == right.DetectionEnabled && left.DetectMotion == right.DetectMotion &&
-		left.DetectPerson == right.DetectPerson && left.MotionSensitivity == right.MotionSensitivity && left.DetectionIntervalSecs == right.DetectionIntervalSecs &&
-		left.PersonConfidence == right.PersonConfidence && left.DetectionCooldownSecs == right.DetectionCooldownSecs && left.DetectionZone == right.DetectionZone
-}
-
-func normalizeSnapshotHost(raw, cameraHost string) string {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || parsed.Hostname() == "" {
-		return raw
-	}
-	port := parsed.Port()
-	host := strings.Trim(cameraHost, "[]")
-	if port != "" {
-		parsed.Host = net.JoinHostPort(host, port)
-	} else if strings.Contains(host, ":") {
-		parsed.Host = "[" + host + "]"
-	} else {
-		parsed.Host = host
-	}
-	return parsed.String()
-}
-
-func validateSnapshotURL(raw, cameraHost string) (string, error) {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
-		return "", errors.New("la URL de snapshot debe usar HTTP o HTTPS")
-	}
-	if !strings.EqualFold(strings.Trim(parsed.Hostname(), "[]"), strings.Trim(cameraHost, "[]")) {
-		return "", errors.New("la URL de snapshot debe pertenecer al host configurado para la cámara")
-	}
-	parsed.User = nil
-	return parsed.String(), nil
+		left.DetectionEnabled == right.DetectionEnabled
 }
