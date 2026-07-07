@@ -203,8 +203,8 @@ function setViewerReady(ready) {
 }
 
 function showConnecting(label = 'Conectando') {
-  const message = q('#viewerMessage');
-  if (message) message.textContent = label;
+  const loader = q('#viewerLoader');
+  if (loader) loader.setAttribute('label', label);
   setViewerReady(false);
 }
 

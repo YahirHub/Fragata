@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#4e73df">
   <title>Cámara · Fragata</title>
-  <script src="/static/theme.js?v=0.9.3"></script>
+  <script src="/static/theme.js?v=0.9.5"></script>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css" integrity="sha384-CK2SzKma4jA5H/MXDUU7i1TqZlCFaD4T01vtyDFvPlD97JQyS+IsSh1nI2EFbpyk" crossorigin="anonymous">
-  <link rel="stylesheet" href="/static/styles.css?v=0.9.3">
+  <link rel="stylesheet" href="/static/styles.css?v=0.9.5-loader-native">
 </head>
 <body>
   <fragata-app-layout page-title="Visor de cámara" page-icon="bi-camera-video" active="cameras">
@@ -27,12 +27,8 @@
     <section class="card dashboard-card viewer-card mb-4">
       <div id="viewerStage" class="viewer-stage viewer-aspect-wide">
         <video id="viewerVideo" autoplay muted playsinline></video>
-        <div id="viewerOverlay" class="viewer-overlay" role="status" aria-live="polite">
-          <div class="viewer-loader" aria-hidden="true">
-            <span class="viewer-loader-ring"></span>
-            <span class="viewer-loader-icon"><i class="bi bi-camera-video-fill"></i></span>
-          </div>
-          <span id="viewerMessage" class="viewer-loading-label">Conectando</span>
+        <div id="viewerOverlay" class="viewer-overlay">
+          <fragata-loader id="viewerLoader" label="Conectando" size="84"></fragata-loader>
         </div>
       </div>
       <div class="viewer-controls">
@@ -85,8 +81,9 @@
     </section>
   </fragata-app-layout>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
-  <script src="/static/layouts.js?v=0.9.3" defer></script>
-  <script src="/static/duration-picker.js?v=0.9.3" defer></script>
-  <script src="/static/viewer.js?v=0.9.3" defer></script>
+  <script src="/static/layouts.js?v=0.9.5" defer></script>
+  <script src="/static/loader.js?v=0.9.5" defer></script>
+  <script src="/static/duration-picker.js?v=0.9.5" defer></script>
+  <script src="/static/viewer.js?v=0.9.5" defer></script>
 </body>
 </html>

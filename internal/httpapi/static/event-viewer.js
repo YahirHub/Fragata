@@ -91,14 +91,14 @@
     const stage = q('#eventVideoStage');
     const video = q('#eventVideo');
     const loading = q('#eventVideoLoading');
-    const message = q('#eventVideoMessage');
+    const loader = q('#eventVideoLoader');
 
     if (event.recording_pending) {
       stage.classList.remove('hidden');
       stage.classList.add('is-loading');
       video.classList.add('hidden');
       loading.classList.remove('hidden');
-      message.textContent = 'Finalizando la grabación…';
+      loader?.setAttribute('label', 'Finalizando la grabación…');
       q('#recordingDescription').textContent = 'El evento ya está vinculado. El video aparecerá automáticamente al cerrar el segmento actual.';
       q('#recordingActions').classList.add('hidden');
       pendingTimer = setTimeout(loadEvent, 5000);
@@ -126,7 +126,7 @@
     stage.classList.add('is-loading');
     video.classList.add('hidden');
     loading.classList.remove('hidden');
-    message.textContent = 'Preparando video…';
+    loader?.setAttribute('label', 'Preparando video…');
     const context = Number(event.playback_context_seconds) || 0;
     q('#recordingDescription').textContent = context > 0
       ? `La reproducción comienza ${Math.round(context)} segundos antes del evento y conserva la resolución original.`
@@ -164,7 +164,7 @@
       q('#eventVideoStage').classList.add('is-loading');
       video.classList.add('hidden');
       q('#eventVideoLoading').classList.remove('hidden');
-      q('#eventVideoMessage').textContent = 'La grabación original está disponible para descargar';
+      q('#eventVideoLoader')?.setAttribute('label', 'La grabación original está disponible para descargar');
     });
     q('#eventFullscreen').addEventListener('click', () => {
       if (q('#eventVideoStage').requestFullscreen) q('#eventVideoStage').requestFullscreen();

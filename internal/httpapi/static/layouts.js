@@ -12,9 +12,9 @@
     { key: 'storage', href: '/settings/storage', icon: 'bi-device-ssd-fill', label: 'Almacenamiento' },
   ];
 
-  function navMarkup(active, mobile = false) {
+  function navMarkup(active) {
     return navItems.map((item) => `
-      <a class="app-nav-link ${active === item.key ? 'active' : ''}" href="${item.href}" ${mobile ? 'data-bs-dismiss="offcanvas"' : ''}>
+      <a class="app-nav-link ${active === item.key ? 'active' : ''}" href="${item.href}">
         <i class="bi ${item.icon}" aria-hidden="true"></i>
         <span>${item.label}</span>
       </a>
@@ -90,7 +90,7 @@
             </div>
             <div class="offcanvas-body">
               <div class="sidebar-section-label">Administración</div>
-              <nav class="app-nav">${navMarkup(active, true)}</nav>
+              <nav class="app-nav">${navMarkup(active)}</nav>
               <div class="sidebar-mobile-status">
                 <span class="status-pulse"></span>
                 <span><strong>Servicio activo</strong><small>Monitoreo local</small></span>
@@ -132,7 +132,7 @@
 
             <main class="app-content">${content}</main>
             <footer class="app-footer">
-              <span>Fragata <strong>v0.9.3</strong></span>
+              <span>Fragata <strong>v0.9.5</strong></span>
               <span>Servidor NVR ligero · Go</span>
             </footer>
           </div>
@@ -249,7 +249,7 @@
               <span><strong>Fragata</strong><small>Servidor de cámaras</small></span>
             </div>
             <div class="auth-card">${content}</div>
-            <footer class="auth-footer">Fragata v0.9.3 · Servidor NVR ligero</footer>
+            <footer class="auth-footer">Fragata v0.9.5 · Servidor NVR ligero</footer>
           </section>
         </main>
       `;

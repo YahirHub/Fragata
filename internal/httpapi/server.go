@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -949,14 +950,18 @@ func writeError(w http.ResponseWriter, status int, message string) {
 
 func securityHeaders(next http.Handler, secureTransport bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secureRequest := requestUsesHTTPS(r, secureTransport)
+		secureContext := secureRequest || isLoopbackHost(r.Host)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+		if secureContext {
+			w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+		}
 		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' https://cdn.jsdelivr.net; style-src-attr 'unsafe-inline'; font-src 'self' https://cdn.jsdelivr.net data:; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; worker-src 'self' blob:")
-		if secureTransport {
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' https://cdn.jsdelivr.net; style-src-attr 'unsafe-inline'; font-src 'self' https://cdn.jsdelivr.net data:; img-src 'self' data:; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; worker-src 'self' blob:")
+		if secureRequest {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/login" {
@@ -964,4 +969,42 @@ func securityHeaders(next http.Handler, secureTransport bool) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func requestUsesHTTPS(r *http.Request, secureTransport bool) bool {
+	if secureTransport || r.TLS != nil {
+		return true
+	}
+	if !isLoopbackRemoteAddress(r.RemoteAddr) {
+		return false
+	}
+	for _, value := range r.Header.Values("X-Forwarded-Proto") {
+		parts := strings.Split(value, ",")
+		if len(parts) > 0 && strings.EqualFold(strings.TrimSpace(parts[len(parts)-1]), "https") {
+			return true
+		}
+	}
+	return false
+}
+
+func isLoopbackHost(hostPort string) bool {
+	host := strings.TrimSpace(hostPort)
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		host = parsedHost
+	}
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func isLoopbackRemoteAddress(remoteAddress string) bool {
+	host := strings.TrimSpace(remoteAddress)
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		host = parsedHost
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
 }

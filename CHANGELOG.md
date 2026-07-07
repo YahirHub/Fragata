@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.9.5 - 2026-07-07
+
+- Añade `AGENTS.md` en la raíz como memoria operativa persistente y punto de entrada para continuar el desarrollo.
+- Define el orden de lectura entre `AGENTS.md`, `contexto/`, documentación y código.
+- Documenta decisiones vigentes sobre eventos ONVIF, grabaciones, seguridad, Docker, frontend, pruebas y entregas.
+- Añade el componente web reutilizable `fragata-loader` con etiqueta y tamaño configurables.
+- Genera una máscara SVG única por instancia para permitir múltiples loaders en la misma página sin colisiones.
+- Sustituye la animación anterior del visor en vivo por el nuevo componente.
+- Aplica el mismo loader al reproductor de eventos, reproductor histórico y cargas de las páginas de eventos y grabaciones.
+- Conserva un único indicador de carga por reproductor y actualiza dinámicamente sus mensajes.
+- Respeta `prefers-reduced-motion`, modo oscuro, ARIA y tamaños adaptables.
+- Registra la atribución del concepto visual original en los avisos de terceros.
+
+## 0.9.4 - 2026-07-07
+
+- Corrige la navegación del sidebar móvil: los enlaces ya no se usan como controles `data-bs-dismiss`, por lo que el clic izquierdo navega normalmente en lugar de limitarse a cerrar el drawer.
+- Conserva el cierre natural del menú al cambiar de página y mantiene el botón independiente para cerrar el `offcanvas`.
+- Envía `Cross-Origin-Opener-Policy` únicamente cuando el origen es HTTPS, localhost o un proxy HTTPS local confiable, evitando advertencias en accesos HTTP directos por IP.
+- Reconoce `X-Forwarded-Proto: https` solo cuando la conexión inmediata procede de loopback, evitando que un cliente remoto falsifique el contexto seguro.
+- Restaura `https://cdn.jsdelivr.net` en `connect-src` para permitir los mapas de código de Bootstrap y eliminar bloqueos CSP de `.map` en la consola.
+- Añade pruebas de cabeceras para HTTP remoto, localhost, proxy HTTPS local y cabeceras reenviadas falsificadas.
+
 ## 0.9.3 - 2026-07-07
 
 - Elimina por completo el detector local basado en snapshots, diferencia de imágenes y HOG/SVM.

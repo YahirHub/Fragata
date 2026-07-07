@@ -6,7 +6,7 @@ services:
     build:
       context: .
       args:
-        VERSION: ${FRAGATA_VERSION:-0.9.3}
+        VERSION: ${FRAGATA_VERSION:-0.9.5}
     container_name: fragata
     restart: unless-stopped
     env_file:

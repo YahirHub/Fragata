@@ -4,6 +4,12 @@ Fragata es un servidor de cámaras IP escrito en Go. Detecta dispositivos ONVIF,
 
 El núcleo sigue siendo un único binario compilable con `CGO_ENABLED=0` y frontend embebido. Fragata no analiza snapshots ni ejecuta un detector local de movimiento o personas: crea una suscripción ONVIF PullPoint y conserva las alertas que la propia cámara genera. FFmpeg sigue siendo opcional para el binario nativo, pero habilita la normalización de video, la conversión de audio y la reproducción histórica compatible con navegadores. El archivo MKV conserva siempre el video y audio originales de la cámara.
 
+## Continuidad del desarrollo
+
+`AGENTS.md` es la memoria operativa principal del repositorio. Resume el estado actual, decisiones no negociables, arquitectura, seguridad, despliegue, convenciones del frontend y validaciones mínimas. Para recuperar contexto al abrir una nueva sesión de trabajo se debe leer primero `AGENTS.md`, después los documentos más recientes de `contexto/` y finalmente contrastar todo con el código y las pruebas.
+
+Cada cambio que altere una decisión persistente debe actualizar `AGENTS.md`; los detalles técnicos e históricos continúan documentándose en archivos numerados dentro de `contexto/`.
+
 ## Estado del MVP
 
 Incluido:
@@ -125,10 +131,17 @@ FRAGATA_SECURE_COOKIES=true
 
 ## Interfaz web
 
-Fragata usa dos componentes de layout reutilizables:
+Fragata usa componentes web reutilizables:
 
 - `fragata-auth-layout`: pantalla de inicio de sesión independiente.
 - `fragata-app-layout`: sidebar, topbar, dropdown de usuario, contenido y footer compartidos por todas las páginas administrativas.
+- `fragata-loader`: indicador de carga para páginas y reproductores, con texto y tamaño configurables, máscara SVG única por instancia y compatibilidad con movimiento reducido.
+
+Ejemplo:
+
+```html
+<fragata-loader label="Preparando video…" size="72"></fragata-loader>
+```
 
 La administración está separada en rutas claras:
 
@@ -143,13 +156,13 @@ La administración está separada en rutas claras:
 - `/settings/sftp`: servidores SFTP globales reutilizables.
 - `/settings/storage`: política de retención y estado del registro local.
 
-En escritorio, el sidebar permanece fijo a la izquierda y puede ocultarse o mostrarse desde la barra superior; la preferencia queda guardada en el navegador. En teléfonos y tablets, el mismo botón abre un drawer `offcanvas` con overlay y cierre automático al elegir una sección. Las tablas conservan desplazamiento horizontal controlado, los formularios se reorganizan y los controles mantienen áreas táctiles adecuadas.
+En escritorio, el sidebar permanece fijo a la izquierda y puede ocultarse o mostrarse desde la barra superior; la preferencia queda guardada en el navegador. En teléfonos y tablets, el mismo botón abre un drawer `offcanvas` con overlay. Los enlaces del menú conservan navegación HTML normal y el drawer desaparece al cargar la sección elegida; el cierre manual usa un botón separado para no interceptar el clic. Las tablas conservan desplazamiento horizontal controlado, los formularios se reorganizan y los controles mantienen áreas táctiles adecuadas.
 
 La interfaz incluye modo claro y oscuro. En la primera visita adopta la preferencia del sistema operativo y, después de cambiarlo manualmente, conserva la selección en el navegador. El selector está disponible tanto en la barra superior como en la pantalla de acceso.
 
 Cuando el login está configurado, el dropdown muestra el usuario administrador y permite cerrar sesión. Si `FRAGATA_ADMIN_USER` o `FRAGATA_ADMIN_PASSWORD` están vacíos, muestra `Invitado` y señala que la autenticación está desactivada.
 
-Bootstrap 5.3.8 y Bootstrap Icons 1.13.1 se cargan desde jsDelivr con versión fija. La política CSP permite únicamente ese CDN para scripts, estilos y fuentes, manteniendo bloqueados otros orígenes.
+Bootstrap 5.3.8 y Bootstrap Icons 1.13.1 se cargan desde jsDelivr con versión fija. La política CSP permite únicamente ese CDN para scripts, estilos, fuentes y sus mapas de código, manteniendo bloqueados otros orígenes. `Cross-Origin-Opener-Policy` solo se envía cuando el navegador accede por HTTPS, localhost o mediante un proxy HTTPS local confiable.
 
 ## Administrar cámaras
 
