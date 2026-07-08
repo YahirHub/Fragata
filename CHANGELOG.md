@@ -1,3 +1,12 @@
+## Sin versión — corrección de visor VPS en prueba
+
+- Sustituye el transporte principal WebRTC por fMP4/MSE autenticado sobre el mismo puerto HTTP/HTTPS.
+- Comparte un proceso FFmpeg por cámara entre todos los espectadores.
+- Evita candidatos ICE con IP interna de Docker como `172.17.0.2`.
+- Añade límites globales de espectadores y cámaras transmitidas.
+- Conserva el endpoint WebRTC anterior solo como compatibilidad.
+- No crea commit ni incrementa versión hasta validar la corrección en el VPS.
+
 # Changelog
 
 ## 0.9.5 - 2026-07-07

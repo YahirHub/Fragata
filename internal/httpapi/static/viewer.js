@@ -1,36 +1,28 @@
 let session = { csrf_token: 'anonymous', auth_enabled: false };
 let camera = null;
-let peer = null;
-let audioPeer = null;
 let retryTimer = null;
-let audioRetryTimer = null;
-let frameDeadlineTimer = null;
 let frameWatchTimer = null;
-let disconnectTimer = null;
-let frameCallbackID = null;
-let liveGeneration = 0;
-let audioGeneration = 0;
-let retryAttempt = 0;
-let audioRetryAttempt = 0;
-let lastFrameAt = 0;
-let lastVideoTime = -1;
-let shuttingDown = false;
-let initialized = false;
-let initInFlight = false;
 let initRetryTimer = null;
 let statusTimer = null;
 let healthTimer = null;
+let liveGeneration = 0;
+let retryAttempt = 0;
+let lastFrameAt = 0;
+let lastVideoTime = -1;
+let liveStartedAt = 0;
+let initialized = false;
+let initInFlight = false;
 let healthInFlight = false;
 let serverOnline = true;
-let remoteStream = null;
+let shuttingDown = false;
 let soundEnabled = false;
+let streamHasAudio = false;
 let wakeLock = null;
 let monitorMode = localStorage.getItem('fragata.viewer.monitor-mode') !== 'false';
 
 const reconnectDelays = [0, 750, 1500, 2500, 4000, 6000, 8000, 10000];
-const audioReconnectDelays = [1000, 2500, 5000, 10000, 20000, 30000];
 const apiTimeout = 15000;
-const offerTimeout = 45000;
+const streamStartupTimeout = 45000;
 const healthIntervalOnline = 8000;
 const healthIntervalOffline = 2500;
 const cameraID = decodeURIComponent(location.pathname.split('/').filter(Boolean).at(-1) || '');
@@ -88,11 +80,13 @@ async function init() {
     q('#cameraSettingsButton').href = `/cameras/${encodeURIComponent(camera.id)}/settings`;
     q('fragata-app-layout')?.setSubtitle(`${camera.name} · ${camera.host}`);
     q('#primaryInfo').textContent = `${camera.codec || '—'} · ${camera.width && camera.height ? `${camera.width}×${camera.height}` : 'resolución pendiente'}`;
-    updateAudioMetadata(camera);
     q('#recordToggle').checked = camera.record;
     q('#segmentDurationPicker').valueSeconds = camera.segment_duration_seconds || session.default_segment_duration_seconds || 300;
-    applyVideoAspect(camera.live_width || camera.width, camera.live_height || camera.height);
+    applyVideoAspect(camera.width, camera.height);
+    updateAudioMetadata(camera);
     await Promise.all([refreshStatus(), refreshUploads()]);
+
+    if (!session.ffmpeg_available) throw new Error('FFmpeg no está disponible para crear la transmisión web protegida');
 
     initialized = true;
     retryAttempt = 0;
@@ -146,29 +140,18 @@ async function refreshStatus() {
     camera.audio_sample_rate = status.audio_sample_rate;
     camera.audio_channels = status.audio_channels;
     updateAudioMetadata(camera);
-    if (soundEnabled && lastFrameAt > 0) startAudio();
   }
-  if (status.live_mode) q('#liveMode').textContent = liveModeLabel(status.live_mode);
-}
-
-function canPlayAudio(source = camera) {
-  const codec = String(source?.audio_codec || '').toUpperCase();
-  return ['PCMA', 'PCMU', 'OPUS'].includes(codec) || (codec === 'AAC' && session.ffmpeg_available);
 }
 
 function updateAudioMetadata(source) {
-  const hasAudio = Boolean(source?.audio_codec);
-  const playable = canPlayAudio(source);
-  const detail = hasAudio
+  const hasAudio = Boolean(source?.audio_codec || streamHasAudio);
+  const detail = source?.audio_codec
     ? `${source.audio_codec} · ${source.audio_sample_rate || '—'} Hz${source.audio_channels ? ` · ${source.audio_channels} canal${source.audio_channels === 1 ? '' : 'es'}` : ''}`
-    : 'Sin audio compatible';
-  q('#audioInfo').textContent = hasAudio && !playable ? `${detail} · vista requiere FFmpeg` : detail;
-  q('#audioButton').classList.toggle('hidden', !playable);
-  q('#audioStatus').classList.toggle('hidden', !playable);
-  if (!playable && soundEnabled) {
-    soundEnabled = false;
-    disposeAudioPeer();
-  }
+    : (streamHasAudio ? 'AAC compatible en la transmisión web' : 'Sin audio detectado');
+  q('#audioInfo').textContent = detail;
+  q('#audioButton').classList.toggle('hidden', !hasAudio);
+  q('#audioStatus').classList.toggle('hidden', !hasAudio);
+  if (!hasAudio) soundEnabled = false;
   updateAudioControl();
 }
 
@@ -180,16 +163,6 @@ async function refreshUploads() {
 
 function translateState(value) {
   return ({ online: 'en línea', starting: 'iniciando', connecting: 'conectando', reconnecting: 'reconectando' }[value] || value || 'desconocido');
-}
-
-function liveModeLabel(mode) {
-  if (mode === 'direct') return 'H.264 directo y normalizado';
-  if (mode === 'ffmpeg') return 'Convertido para navegador con FFmpeg';
-  if (mode === 'substream') {
-    const resolution = camera.live_width && camera.live_height ? ` · ${camera.live_width}×${camera.live_height}` : '';
-    return `Substream H.264${resolution}`;
-  }
-  return mode || '—';
 }
 
 function setViewerReady(ready) {
@@ -229,7 +202,7 @@ function markServerUnavailable() {
   clearTimeout(retryTimer);
   retryTimer = null;
   liveGeneration++;
-  disposePeer();
+  disposeLiveStream();
   setRuntimeState('offline', 'servidor desconectado');
   showConnecting('Fragata no está disponible · reintentando');
   if (firstFailure) notify('Se perdió la conexión con Fragata. El visor se recuperará automáticamente.', 'warning');
@@ -256,362 +229,162 @@ async function checkServerHealth() {
       notify('Fragata volvió a estar disponible. Recuperando la cámara…', 'success');
       initialized = false;
       retryAttempt = 0;
-      audioRetryAttempt = 0;
-      if (initInFlight) {
-        clearTimeout(initRetryTimer);
-        initRetryTimer = setTimeout(() => {
-          if (serverOnline && !initialized) init();
-        }, 300);
-      } else {
-        await init();
-      }
+      await init();
     }
   } catch (_) {
     markServerUnavailable();
   } finally {
     healthInFlight = false;
-    if (!shuttingDown) {
-      healthTimer = setTimeout(checkServerHealth, serverOnline ? healthIntervalOnline : healthIntervalOffline);
-    }
+    if (!shuttingDown) healthTimer = setTimeout(checkServerHealth, serverOnline ? healthIntervalOnline : healthIntervalOffline);
   }
-}
-
-function preferH264(transceiver) {
-  try {
-    const capabilities = RTCRtpReceiver.getCapabilities?.('video');
-    const codecs = capabilities?.codecs?.filter((codec) => codec.mimeType.toLowerCase() === 'video/h264') || [];
-    if (codecs.length && typeof transceiver.setCodecPreferences === 'function') transceiver.setCodecPreferences(codecs);
-  } catch (_) {
-    // El navegador negociará su codec por defecto.
-  }
-}
-
-function ensureRemoteStream() {
-  if (!remoteStream) remoteStream = new MediaStream();
-  const video = q('#viewerVideo');
-  if (video.srcObject !== remoteStream) video.srcObject = remoteStream;
-  const hasLiveAudio = remoteStream.getAudioTracks().some((track) => track.readyState === 'live');
-  video.muted = !soundEnabled || !hasLiveAudio;
-  video.autoplay = true;
-  video.playsInline = true;
-  return remoteStream;
-}
-
-function attachVideoTrack(event, generation, connection) {
-  if (!isCurrentLive(generation, connection) || event.track.kind !== 'video') return;
-  const video = q('#viewerVideo');
-  const stream = ensureRemoteStream();
-  if (!stream.getVideoTracks().some((track) => track.id === event.track.id)) stream.addTrack(event.track);
-  event.track.onended = () => scheduleReconnect(generation, true);
-  event.track.onmute = () => {
-    if (!isCurrentLive(generation, connection)) return;
-    showConnecting();
-    armDisconnectRetry(generation, connection, 4000);
-  };
-  event.track.onunmute = () => clearDisconnectTimer();
-  video.onloadeddata = () => {
-    if (!isCurrentLive(generation, connection)) return;
-    if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0 && video.videoHeight > 0) markDecodedFrame(generation, connection);
-  };
-  beginFrameWatch(generation, connection);
-  video.play().catch(() => scheduleReconnect(generation));
-}
-
-function attachAudioTrack(event, generation, connection) {
-  if (!isCurrentAudio(generation, connection) || event.track.kind !== 'audio') return;
-  const video = q('#viewerVideo');
-  const stream = ensureRemoteStream();
-  stream.getAudioTracks().forEach((track) => {
-    if (track.id !== event.track.id) {
-      stream.removeTrack(track);
-      track.stop();
-    }
-  });
-  if (!stream.getAudioTracks().some((track) => track.id === event.track.id)) stream.addTrack(event.track);
-  event.track.onended = () => scheduleAudioReconnect(generation);
-  event.track.onmute = () => scheduleAudioReconnect(generation);
-  event.track.onunmute = () => {
-    audioRetryAttempt = 0;
-    updateAudioControl();
-  };
-  video.muted = !soundEnabled;
-  video.play().catch(() => {});
-  audioRetryAttempt = 0;
-  updateAudioControl();
-}
-
-function updateAudioControl() {
-  const button = q('#audioButton');
-  const status = q('#audioStatus');
-  if (!button || button.classList.contains('hidden')) return;
-  const hasTrack = Boolean(remoteStream?.getAudioTracks().some((track) => track.readyState === 'live'));
-  button.disabled = false;
-  button.innerHTML = soundEnabled ? '<i class="bi bi-volume-up me-2"></i>Silenciar' : '<i class="bi bi-volume-mute me-2"></i>Activar sonido';
-  if (status) {
-    if (hasTrack && soundEnabled) status.innerHTML = '<i class="bi bi-volume-up me-1"></i>Audio activo';
-    else if (soundEnabled) status.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>Conectando audio';
-    else status.innerHTML = '<i class="bi bi-volume-mute me-1"></i>Audio silenciado';
-  }
-}
-
-function beginFrameWatch(generation, connection) {
-  clearFrameWatch();
-  lastFrameAt = 0;
-  lastVideoTime = -1;
-  const video = q('#viewerVideo');
-  armFrameDeadline(generation, connection);
-
-  if (typeof video.requestVideoFrameCallback === 'function') {
-    const onFrame = () => {
-      if (!isCurrentLive(generation, connection)) return;
-      markDecodedFrame(generation, connection);
-      frameCallbackID = video.requestVideoFrameCallback(onFrame);
-    };
-    frameCallbackID = video.requestVideoFrameCallback(onFrame);
-  }
-
-  frameWatchTimer = setInterval(() => {
-    if (!isCurrentLive(generation, connection) || document.hidden) return;
-    const currentTime = Number(video.currentTime);
-    const hasDecodedImage = video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0 && video.videoHeight > 0;
-    const advanced = Number.isFinite(currentTime) && (lastVideoTime < 0 || currentTime > lastVideoTime + 0.001);
-    if (hasDecodedImage && advanced) {
-      lastVideoTime = currentTime;
-      markDecodedFrame(generation, connection);
-    }
-    if (lastFrameAt > 0 && Date.now() - lastFrameAt > 10000) scheduleReconnect(generation, true);
-  }, 1000);
-}
-
-function armFrameDeadline(generation, connection) {
-  clearTimeout(frameDeadlineTimer);
-  frameDeadlineTimer = setTimeout(() => {
-    if (!lastFrameAt && isCurrentLive(generation, connection)) scheduleReconnect(generation, true);
-  }, 20000);
-}
-
-function markDecodedFrame(generation, connection) {
-  if (generation !== liveGeneration || (connection && !isCurrentLive(generation, connection))) return;
-  lastFrameAt = Date.now();
-  retryAttempt = 0;
-  clearTimeout(frameDeadlineTimer);
-  frameDeadlineTimer = null;
-  clearDisconnectTimer();
-  const video = q('#viewerVideo');
-  if (video?.videoWidth > 0 && video?.videoHeight > 0) applyVideoAspect(video.videoWidth, video.videoHeight);
-  setViewerReady(true);
-  if (soundEnabled) startAudio();
-}
-
-function armDisconnectRetry(generation, connection, delay = 3500) {
-  clearDisconnectTimer();
-  disconnectTimer = setTimeout(() => {
-    if (isCurrentLive(generation, connection)) scheduleReconnect(generation, true);
-  }, delay);
-}
-
-function clearDisconnectTimer() {
-  clearTimeout(disconnectTimer);
-  disconnectTimer = null;
-}
-
-function clearFrameWatch() {
-  clearTimeout(frameDeadlineTimer);
-  clearInterval(frameWatchTimer);
-  frameDeadlineTimer = null;
-  frameWatchTimer = null;
-  const video = q('#viewerVideo');
-  if (frameCallbackID !== null && typeof video?.cancelVideoFrameCallback === 'function') video.cancelVideoFrameCallback(frameCallbackID);
-  frameCallbackID = null;
-}
-
-function isCurrentLive(generation, connection) {
-  return !shuttingDown && generation === liveGeneration && peer === connection;
-}
-
-function isCurrentAudio(generation, connection) {
-  return !shuttingDown && generation === audioGeneration && audioPeer === connection;
-}
-
-function disposeAudioPeer() {
-  clearTimeout(audioRetryTimer);
-  audioRetryTimer = null;
-  audioGeneration++;
-  const current = audioPeer;
-  audioPeer = null;
-  if (current) current.close();
-  if (remoteStream) {
-    remoteStream.getAudioTracks().forEach((track) => {
-      remoteStream.removeTrack(track);
-      track.stop();
-    });
-  }
-  updateAudioControl();
-}
-
-function disposePeer() {
-  clearFrameWatch();
-  clearDisconnectTimer();
-  disposeAudioPeer();
-  const current = peer;
-  peer = null;
-  if (current) current.close();
-  const video = q('#viewerVideo');
-  if (remoteStream) remoteStream.getTracks().forEach((track) => track.stop());
-  remoteStream = null;
-  if (video) {
-    video.pause();
-    video.srcObject = null;
-  }
-  lastFrameAt = 0;
-  lastVideoTime = -1;
-}
-
-function scheduleReconnect(generation, immediate = false) {
-  if (shuttingDown || !serverOnline || generation !== liveGeneration) return;
-  showConnecting();
-  disposePeer();
-  if (retryTimer) return;
-  const offlineDelay = navigator.onLine === false ? 3000 : null;
-  const delay = offlineDelay ?? (immediate ? 0 : reconnectDelays[Math.min(retryAttempt, reconnectDelays.length - 1)]);
-  retryAttempt = Math.min(retryAttempt + 1, reconnectDelays.length - 1);
-  retryTimer = setTimeout(() => {
-    retryTimer = null;
-    if (!shuttingDown && generation === liveGeneration) startLive();
-  }, delay);
-}
-
-function scheduleAudioReconnect(generation, immediate = false) {
-  if (shuttingDown || !soundEnabled || generation !== audioGeneration || lastFrameAt === 0) return;
-  const current = audioPeer;
-  audioPeer = null;
-  if (current) current.close();
-  if (remoteStream) {
-    remoteStream.getAudioTracks().forEach((track) => {
-      remoteStream.removeTrack(track);
-      track.stop();
-    });
-  }
-  updateAudioControl();
-  if (audioRetryTimer) return;
-  const delay = immediate ? 0 : audioReconnectDelays[Math.min(audioRetryAttempt, audioReconnectDelays.length - 1)];
-  audioRetryAttempt = Math.min(audioRetryAttempt + 1, audioReconnectDelays.length - 1);
-  audioRetryTimer = setTimeout(() => {
-    audioRetryTimer = null;
-    if (!shuttingDown && soundEnabled && lastFrameAt > 0) startAudio();
-  }, delay);
 }
 
 async function startLive() {
   if (shuttingDown || !serverOnline || !initialized) return;
   clearTimeout(retryTimer);
   retryTimer = null;
-  disposePeer();
-  showConnecting();
+  disposeLiveStream();
+  showConnecting('Preparando transmisión protegida');
 
   const generation = ++liveGeneration;
-  const connection = new RTCPeerConnection();
-  peer = connection;
-  const transceiver = connection.addTransceiver('video', { direction: 'recvonly' });
-  preferH264(transceiver);
-  connection.ontrack = (event) => attachVideoTrack(event, generation, connection);
-  connection.onconnectionstatechange = () => {
-    if (!isCurrentLive(generation, connection)) return;
-    switch (connection.connectionState) {
-      case 'connected':
-        clearDisconnectTimer();
-        break;
-      case 'disconnected':
-        showConnecting();
-        armDisconnectRetry(generation, connection);
-        break;
-      case 'failed':
-      case 'closed':
-        scheduleReconnect(generation, true);
-        break;
-      default:
-        showConnecting();
-    }
-  };
-  connection.oniceconnectionstatechange = () => {
-    if (!isCurrentLive(generation, connection)) return;
-    if (connection.iceConnectionState === 'failed') scheduleReconnect(generation, true);
-    else if (connection.iceConnectionState === 'disconnected') {
-      showConnecting();
-      armDisconnectRetry(generation, connection);
-    }
-  };
+  const video = q('#viewerVideo');
+  liveStartedAt = Date.now();
+  lastFrameAt = 0;
+  lastVideoTime = -1;
+
+  streamHasAudio = Boolean(camera?.audio_codec);
+  updateAudioMetadata(camera);
+  q('#liveMode').textContent = String(camera?.codec || '').toUpperCase() === 'H264'
+    ? 'MP4 protegido · H.264 directo'
+    : 'MP4 protegido · H.265→H.264 con FFmpeg';
+
+  video.srcObject = null;
+  video.muted = !soundEnabled;
+  video.autoplay = true;
+  video.playsInline = true;
+  video.preload = 'auto';
+  video.src = `/api/cameras/${encodeURIComponent(cameraID)}/live-stream?session=${generation}&_=${Date.now()}`;
+  video.load();
+  beginFrameWatch(generation);
 
   try {
-    await connection.setLocalDescription(await connection.createOffer());
-    await waitICE(connection, () => isCurrentLive(generation, connection));
-    if (!isCurrentLive(generation, connection)) return;
-    const answer = await api(`/api/cameras/${encodeURIComponent(cameraID)}/offer`, {
-      method: 'POST',
-      body: JSON.stringify({ sdp: connection.localDescription.sdp, media: 'video' }),
-      timeout: offerTimeout,
-    });
-    if (!isCurrentLive(generation, connection)) return;
-    await connection.setRemoteDescription({ type: 'answer', sdp: answer.sdp });
-    q('#liveMode').textContent = liveModeLabel(answer.mode);
-    armFrameDeadline(generation, connection);
+    await video.play();
   } catch (error) {
-    if (isNetworkFailure(error)) markServerUnavailable();
-    else scheduleReconnect(generation);
+    if (generation !== liveGeneration || shuttingDown) return;
+    if (error?.name === 'NotAllowedError') {
+      soundEnabled = false;
+      video.muted = true;
+      updateAudioControl();
+      try {
+        await video.play();
+      } catch (_) {
+        // loadeddata/playing o el vigilante de inicio decidirán si se reconecta.
+      }
+    }
   }
 }
 
-async function startAudio() {
-  if (shuttingDown || !soundEnabled || lastFrameAt === 0 || !canPlayAudio() || audioPeer || audioRetryTimer) return;
-  const generation = ++audioGeneration;
-  const connection = new RTCPeerConnection();
-  audioPeer = connection;
-  connection.addTransceiver('audio', { direction: 'recvonly' });
-  connection.ontrack = (event) => attachAudioTrack(event, generation, connection);
-  connection.onconnectionstatechange = () => {
-    if (!isCurrentAudio(generation, connection)) return;
-    if (connection.connectionState === 'failed' || connection.connectionState === 'closed' || connection.connectionState === 'disconnected') {
-      scheduleAudioReconnect(generation);
+function beginFrameWatch(generation) {
+  clearInterval(frameWatchTimer);
+  lastFrameAt = 0;
+  lastVideoTime = -1;
+  liveStartedAt = Date.now();
+  const video = q('#viewerVideo');
+  frameWatchTimer = setInterval(() => {
+    if (generation !== liveGeneration || shuttingDown || document.hidden) return;
+    const currentTime = Number(video.currentTime);
+    const hasImage = video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0 && video.videoHeight > 0;
+    const advanced = Number.isFinite(currentTime) && (lastVideoTime < 0 || currentTime > lastVideoTime + 0.001);
+    if (hasImage && advanced) {
+      lastVideoTime = currentTime;
+      markDecodedFrame(generation);
     }
-  };
-  connection.oniceconnectionstatechange = () => {
-    if (!isCurrentAudio(generation, connection)) return;
-    if (connection.iceConnectionState === 'failed' || connection.iceConnectionState === 'disconnected') scheduleAudioReconnect(generation);
-  };
+    if (!lastFrameAt && liveStartedAt > 0 && Date.now() - liveStartedAt > streamStartupTimeout) {
+      showConnecting('La transmisión no entregó el primer fotograma · reintentando');
+      scheduleReconnect(generation, true);
+      return;
+    }
+    if (lastFrameAt > 0 && Date.now() - lastFrameAt > 12000) {
+      scheduleReconnect(generation, true);
+    }
+  }, 1000);
+}
 
+function markDecodedFrame(generation) {
+  if (generation !== liveGeneration || shuttingDown) return;
+  lastFrameAt = Date.now();
+  retryAttempt = 0;
+  const video = q('#viewerVideo');
+  if (video.videoWidth > 0 && video.videoHeight > 0) applyVideoAspect(video.videoWidth, video.videoHeight);
+  setViewerReady(true);
+}
+
+function scheduleReconnect(generation, immediate = false) {
+  if (shuttingDown || !serverOnline || generation !== liveGeneration) return;
+  showConnecting(immediate ? 'Reconectando video' : 'Esperando video');
+  disposeLiveStream();
+  if (retryTimer) return;
+  const delay = immediate ? 0 : reconnectDelays[Math.min(retryAttempt, reconnectDelays.length - 1)];
+  retryAttempt = Math.min(retryAttempt + 1, reconnectDelays.length - 1);
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    if (!shuttingDown && serverOnline && generation === liveGeneration) startLive();
+  }, delay);
+}
+
+function disposeLiveStream() {
+  clearInterval(frameWatchTimer);
+  frameWatchTimer = null;
+  const video = q('#viewerVideo');
+  video.pause();
+  video.removeAttribute('src');
+  video.srcObject = null;
+  video.load();
+  liveStartedAt = 0;
+  lastFrameAt = 0;
+  lastVideoTime = -1;
+}
+
+function keepNearLiveEdge() {
+  const video = q('#viewerVideo');
+  if (!video?.buffered?.length || video.seeking) return;
   try {
-    await connection.setLocalDescription(await connection.createOffer());
-    await waitICE(connection, () => isCurrentAudio(generation, connection));
-    if (!isCurrentAudio(generation, connection)) return;
-    const answer = await api(`/api/cameras/${encodeURIComponent(cameraID)}/offer`, {
-      method: 'POST',
-      body: JSON.stringify({ sdp: connection.localDescription.sdp, media: 'audio' }),
-      timeout: offerTimeout,
-    });
-    if (!isCurrentAudio(generation, connection)) return;
-    await connection.setRemoteDescription({ type: 'answer', sdp: answer.sdp });
-  } catch (error) {
-    if (isNetworkFailure(error)) markServerUnavailable();
-    else scheduleAudioReconnect(generation);
+    const index = video.buffered.length - 1;
+    const start = video.buffered.start(index);
+    const end = video.buffered.end(index);
+    if (!Number.isFinite(video.currentTime) || video.currentTime < start || end - video.currentTime > 6) {
+      video.currentTime = Math.max(start, end - 0.75);
+    }
+  } catch (_) {
+    // El rango puede cambiar mientras el navegador procesa un fragmento nuevo.
   }
 }
 
-function waitICE(connection, stillCurrent) {
-  if (connection.iceGatheringState === 'complete') return Promise.resolve();
-  return new Promise((resolve) => {
-    let finished = false;
-    const finish = () => {
-      if (finished) return;
-      finished = true;
-      connection.removeEventListener('icegatheringstatechange', changed);
-      resolve();
-    };
-    const changed = () => {
-      if (connection.iceGatheringState === 'complete' || !stillCurrent()) finish();
-    };
-    connection.addEventListener('icegatheringstatechange', changed);
-    setTimeout(finish, 8000);
-  });
+function liveVideoErrorMessage() {
+  const error = q('#viewerVideo')?.error;
+  if (!error) return 'No se pudo abrir la transmisión en vivo';
+  const messages = {
+    1: 'La carga del video fue cancelada',
+    2: 'Se interrumpió la transmisión de video',
+    3: 'El navegador no pudo decodificar el video',
+    4: 'El formato de la transmisión no es compatible',
+  };
+  return messages[error.code] || 'No se pudo abrir la transmisión en vivo';
+}
+
+function updateAudioControl() {
+  const button = q('#audioButton');
+  const status = q('#audioStatus');
+  if (!button || button.classList.contains('hidden')) return;
+  button.disabled = false;
+  button.innerHTML = soundEnabled
+    ? '<i class="bi bi-volume-up me-2"></i>Silenciar'
+    : '<i class="bi bi-volume-mute me-2"></i>Activar sonido';
+  if (status) {
+    status.innerHTML = soundEnabled
+      ? '<i class="bi bi-volume-up me-1"></i>Audio activo'
+      : '<i class="bi bi-volume-mute me-1"></i>Audio silenciado';
+  }
 }
 
 function updateMonitorControl() {
@@ -659,52 +432,46 @@ async function releaseWakeLock() {
 function stopLive() {
   shuttingDown = true;
   liveGeneration++;
-  audioGeneration++;
   clearTimeout(retryTimer);
-  clearTimeout(audioRetryTimer);
   clearTimeout(initRetryTimer);
   clearTimeout(healthTimer);
   clearInterval(statusTimer);
   retryTimer = null;
-  audioRetryTimer = null;
   initRetryTimer = null;
   healthTimer = null;
   statusTimer = null;
-  disposePeer();
+  disposeLiveStream();
   releaseWakeLock();
 }
 
-q('#viewerVideo').addEventListener('error', () => scheduleReconnect(liveGeneration, true));
+q('#viewerVideo').addEventListener('loadeddata', () => markDecodedFrame(liveGeneration));
+q('#viewerVideo').addEventListener('playing', () => markDecodedFrame(liveGeneration));
+q('#viewerVideo').addEventListener('error', () => {
+  showConnecting(`${liveVideoErrorMessage()} · reintentando`);
+  scheduleReconnect(liveGeneration, true);
+});
 q('#viewerVideo').addEventListener('stalled', () => {
-  showConnecting();
-  const generation = liveGeneration;
-  const connection = peer;
-  if (connection) armDisconnectRetry(generation, connection, 3000);
+  if (lastFrameAt && Date.now() - lastFrameAt > 5000) scheduleReconnect(liveGeneration, true);
 });
 q('#viewerVideo').addEventListener('waiting', () => {
-  if (!lastFrameAt) showConnecting();
+  if (!lastFrameAt) showConnecting('Esperando el primer fotograma');
 });
+q('#viewerVideo').addEventListener('progress', keepNearLiveEdge);
+q('#viewerVideo').addEventListener('timeupdate', keepNearLiveEdge);
 q('#audioButton').addEventListener('click', async () => {
   const video = q('#viewerVideo');
-  if (soundEnabled) {
-    soundEnabled = false;
-    video.muted = true;
-    disposeAudioPeer();
-    updateAudioControl();
-    return;
-  }
-  soundEnabled = true;
-  const hasLiveAudio = Boolean(remoteStream?.getAudioTracks().some((track) => track.readyState === 'live'));
-  video.muted = !hasLiveAudio;
+  soundEnabled = !soundEnabled;
+  video.muted = !soundEnabled;
   updateAudioControl();
-  startAudio();
-  try {
-    await video.play();
-  } catch (_) {
-    soundEnabled = false;
-    video.muted = true;
-    disposeAudioPeer();
-    updateAudioControl();
+  if (soundEnabled) {
+    try {
+      await video.play();
+    } catch (_) {
+      soundEnabled = false;
+      video.muted = true;
+      updateAudioControl();
+      notify('El navegador bloqueó el audio. Vuelve a intentarlo después de tocar el reproductor.', 'warning');
+    }
   }
 });
 q('#monitorButton')?.addEventListener('click', async () => {

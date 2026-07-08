@@ -14,7 +14,7 @@ No reemplaza el código ni la documentación detallada. El orden recomendado de 
 - Versión de trabajo: **0.9.5**.
 - Backend: Go, binario único con frontend embebido mediante `go:embed`.
 - Persistencia principal: archivo de estado local; credenciales cifradas con AES-256-GCM.
-- Video en vivo: RTSP de la cámara hacia WebRTC del navegador.
+- Video en vivo principal: RTSP -> FFmpeg -> MP4 fragmentado (fMP4/MSE) por el mismo HTTP/HTTPS autenticado de Fragata. WebRTC queda como compatibilidad heredada y no es requisito para VPS.
 - Grabación: MKV H.264/H.265 sin recomprimir, con audio compatible cuando existe.
 - Reproducción histórica: FFmpeg/FFprobe opcionales en ejecución nativa e incluidos en Docker.
 - Eventos: **exclusivamente ONVIF PullPoint**. No reintroducir detección local por snapshots, HOG/SVM ni campos de URL de snapshot.
@@ -69,7 +69,8 @@ cmd/fragata/                  arranque y ensamblado
 internal/auth/                sesiones y autenticación
 internal/camera/              descubrimiento, configuración y workers
 internal/httpapi/             API, páginas y frontend embebido
-internal/live/                WebRTC
+internal/live/                WebRTC heredado
+internal/livestream/          fMP4/MSE autenticado por HTTP
 internal/matroska/            escritura MKV
 internal/onvif/               ONVIF, digest, descubrimiento y eventos
 internal/recording/           grabación y recuperación
@@ -161,3 +162,11 @@ Toda entrega de desarrollo debe incluir al menos:
 - `Summary` y `Description` listos para pegar en GitHub Desktop, dentro de bloques de código y en español.
 
 Los commits, documentación pública y código no deben mencionar herramientas o proveedores usados para producir los cambios.
+
+## Transmisión en vivo por VPS
+
+- El visor usa `GET /api/cameras/{id}/live-stream`, protegido por la sesión normal.
+- No expone puertos RTSP/WebRTC adicionales; viaja por el mismo puerto TCP de la aplicación.
+- Un proceso FFmpeg se comparte por cámara y se detiene tras `FRAGATA_LIVE_IDLE_TIMEOUT` sin espectadores.
+- `FRAGATA_MAX_VIEWERS` limita navegadores y `FRAGATA_MAX_LIVE_STREAMS` limita cámaras activas simultáneamente.
+- No volver a depender de candidatos ICE internos de Docker para la vista principal.

@@ -42,6 +42,7 @@ type Config struct {
 	RTSPDictionaryPath   string
 	STUNServers          []string
 	MaxViewers           int
+	MaxLiveStreams       int
 	LiveIdleTimeout      time.Duration
 	FFmpegPath           string
 	FFprobePath          string
@@ -102,6 +103,7 @@ func Load(dotenvPath string) (Config, error) {
 		RTSPDictionaryPath:   strings.TrimSpace(os.Getenv("FRAGATA_RTSP_DICTIONARY")),
 		STUNServers:          envList("FRAGATA_STUN_SERVERS", nil),
 		MaxViewers:           envInt("FRAGATA_MAX_VIEWERS", 32),
+		MaxLiveStreams:       envInt("FRAGATA_MAX_LIVE_STREAMS", 4),
 		LiveIdleTimeout:      envDuration("FRAGATA_LIVE_IDLE_TIMEOUT", 30*time.Second),
 		MaxTranscodes:        envInt("FRAGATA_MAX_TRANSCODES", 2),
 		LoginMaxAttempts:     envInt("FRAGATA_LOGIN_MAX_ATTEMPTS", 5),
@@ -140,6 +142,9 @@ func Load(dotenvPath string) (Config, error) {
 	}
 	if cfg.MaxViewers < 1 || cfg.MaxViewers > 256 {
 		return Config{}, errors.New("FRAGATA_MAX_VIEWERS debe estar entre 1 y 256")
+	}
+	if cfg.MaxLiveStreams < 1 || cfg.MaxLiveStreams > 32 {
+		return Config{}, errors.New("FRAGATA_MAX_LIVE_STREAMS debe estar entre 1 y 32")
 	}
 	if cfg.MaxTranscodes < 1 || cfg.MaxTranscodes > 16 {
 		return Config{}, errors.New("FRAGATA_MAX_TRANSCODES debe estar entre 1 y 16")

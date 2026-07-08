@@ -50,3 +50,7 @@ Las llaves SFTP se montan aparte como solo lectura en `/run/secrets/fragata`.
 - Bootstrap y Bootstrap Icons aún se obtienen desde jsDelivr. Sus hojas y scripts tienen SRI y la CSP limita el origen, incluyendo únicamente sus mapas de código en `connect-src`; una instalación completamente aislada debe empaquetar esos recursos localmente.
 - H.265 se convierte a H.264 durante la reproducción web y puede consumir CPU. Ajuste `FRAGATA_MAX_TRANSCODES` al hardware disponible.
 - Fragata depende de las capacidades de eventos del firmware. La sensibilidad, zonas y clasificación se configuran en la cámara; un dispositivo sin ONVIF Events PullPoint no puede generar eventos en Fragata.
+
+## Video en vivo autenticado
+
+La ruta `/api/cameras/{id}/live-stream` está detrás del mismo middleware de sesión que el resto de la API. El stream usa cookies `HttpOnly`, `SameSite=Strict`, no se almacena en caché y se sirve por el mismo origen. No se publican credenciales RTSP, puertos RTSP ni candidatos ICE. Una URL sin sesión válida no entrega video. En producción debe usarse HTTPS para proteger cookies y contenido durante el transporte.

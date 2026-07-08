@@ -24,6 +24,7 @@ import (
 	"fragata/internal/camera"
 	"fragata/internal/config"
 	"fragata/internal/live"
+	"fragata/internal/livestream"
 	"fragata/internal/model"
 	"fragata/internal/networkdiag"
 	"fragata/internal/onvif"
@@ -42,6 +43,7 @@ type Server struct {
 	auth       *auth.Manager
 	cameras    *camera.Manager
 	live       *live.Manager
+	liveStream *livestream.Manager
 	uploader   *upload.Uploader
 	store      *store.Store
 	logger     *slog.Logger
@@ -55,7 +57,7 @@ func New(cfg config.Config, authManager *auth.Manager, cameras *camera.Manager, 
 	if maxTranscodes < 1 {
 		maxTranscodes = 2
 	}
-	s := &Server{cfg: cfg, auth: authManager, cameras: cameras, live: liveManager, uploader: uploader, store: state, logger: logger, limiter: newLoginLimiter(cfg.LoginMaxAttempts, cfg.LoginWindow, cfg.LoginBlockDuration), transcodes: make(chan struct{}, maxTranscodes)}
+	s := &Server{cfg: cfg, auth: authManager, cameras: cameras, live: liveManager, liveStream: livestream.New(cfg.FFmpegPath, cfg.LiveIdleTimeout, cfg.MaxViewers, cfg.MaxLiveStreams, logger), uploader: uploader, store: state, logger: logger, limiter: newLoginLimiter(cfg.LoginMaxAttempts, cfg.LoginWindow, cfg.LoginBlockDuration), transcodes: make(chan struct{}, maxTranscodes)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /login", s.loginPage)
@@ -104,6 +106,7 @@ func New(cfg config.Config, authManager *auth.Manager, cameras *camera.Manager, 
 	protected.HandleFunc("GET /api/retention", s.getRetention)
 	protected.HandleFunc("PATCH /api/retention", s.updateRetention)
 	protected.HandleFunc("POST /api/cameras/{id}/offer", s.offer)
+	protected.HandleFunc("GET /api/cameras/{id}/live-stream", s.liveCameraStream)
 
 	sub, err := fs.Sub(staticFiles, "static")
 	if err != nil {
@@ -554,7 +557,14 @@ func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.cameras.Statuses())
+	statuses := s.cameras.Statuses()
+	for index := range statuses {
+		if viewers := s.liveStream.ViewerCount(statuses[index].CameraID); viewers > 0 {
+			statuses[index].Viewers = viewers
+			statuses[index].LiveMode = "http-fmp4"
+		}
+	}
+	writeJSON(w, http.StatusOK, statuses)
 }
 func (s *Server) listDetectionEvents(w http.ResponseWriter, r *http.Request) {
 	cameraID := strings.TrimSpace(r.URL.Query().Get("camera_id"))
@@ -849,6 +859,137 @@ func secureID() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(value), nil
+}
+
+func (s *Server) liveCameraStream(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	cam, ok := s.cameras.Camera(id)
+	if !ok || !cam.Enabled {
+		writeError(w, http.StatusNotFound, "cámara no encontrada o deshabilitada")
+		return
+	}
+	streamURL := strings.TrimSpace(cam.RTSPURL)
+	codec := cam.Codec
+	if streamURL == "" {
+		streamURL = strings.TrimSpace(cam.LiveRTSPURL)
+		codec = cam.LiveCodec
+	}
+	rawURL, err := fragrtsp.WithCredentials(streamURL, cam.Username, cam.Password)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "no se pudo preparar la fuente RTSP")
+		return
+	}
+	subscription, err := s.liveStream.Subscribe(r.Context(), livestream.Source{ID: cam.ID, URL: rawURL, VideoCodec: codec})
+	if err != nil {
+		status := http.StatusServiceUnavailable
+		if strings.Contains(err.Error(), "límite") {
+			status = http.StatusTooManyRequests
+			w.Header().Set("Retry-After", "5")
+		}
+		writeError(w, status, model.RedactSecrets(err.Error()))
+		return
+	}
+	defer subscription.Close()
+
+	metadata, initSegment, err := waitForLiveStreamStart(r.Context(), subscription.Frames, 45*time.Second)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+		s.logger.Warn("live stream startup failed", "camera_id", cam.ID, "error", model.RedactSecrets(err.Error()))
+		writeError(w, http.StatusServiceUnavailable, model.RedactSecrets(err.Error()))
+		return
+	}
+
+	controller := http.NewResponseController(w)
+	_ = controller.SetWriteDeadline(time.Time{})
+	w.Header().Set("Content-Type", "video/mp4")
+	w.Header().Set("Content-Disposition", "inline")
+	w.Header().Set("Cache-Control", "private, no-store, no-cache, must-revalidate, max-age=0")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Accept-Ranges", "none")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.Header().Set("Content-Encoding", "identity")
+	w.Header().Set("X-Fragata-Stream-Mode", metadata.Mode)
+	w.Header().Set("X-Fragata-Stream-Audio", strconv.FormatBool(metadata.HasAudio))
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+	if _, err := w.Write(initSegment); err != nil {
+		return
+	}
+	if flusher != nil {
+		flusher.Flush()
+	}
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case frame, open := <-subscription.Frames:
+			if !open {
+				return
+			}
+			switch frame.Type {
+			case livestream.FrameMedia:
+				if len(frame.Data) == 0 {
+					continue
+				}
+				if _, err := w.Write(frame.Data); err != nil {
+					return
+				}
+				if flusher != nil {
+					flusher.Flush()
+				}
+			case livestream.FrameError:
+				s.logger.Warn("live stream ended", "camera_id", cam.ID, "error", model.RedactSecrets(string(frame.Data)))
+				return
+			}
+		}
+	}
+}
+
+func waitForLiveStreamStart(ctx context.Context, frames <-chan livestream.Frame, timeout time.Duration) (livestream.Metadata, []byte, error) {
+	if timeout <= 0 {
+		timeout = 45 * time.Second
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	var metadata livestream.Metadata
+	var haveMetadata bool
+	for {
+		select {
+		case <-ctx.Done():
+			return livestream.Metadata{}, nil, ctx.Err()
+		case <-timer.C:
+			return livestream.Metadata{}, nil, errors.New("FFmpeg no entregó un MP4 reproducible a tiempo")
+		case frame, open := <-frames:
+			if !open {
+				return livestream.Metadata{}, nil, errors.New("la transmisión terminó antes de entregar video")
+			}
+			switch frame.Type {
+			case livestream.FrameMetadata:
+				if err := json.Unmarshal(frame.Data, &metadata); err != nil {
+					return livestream.Metadata{}, nil, errors.New("FFmpeg produjo metadatos de video inválidos")
+				}
+				haveMetadata = true
+			case livestream.FrameInit:
+				if !haveMetadata {
+					return livestream.Metadata{}, nil, errors.New("la transmisión no incluyó sus metadatos")
+				}
+				if len(frame.Data) == 0 {
+					return livestream.Metadata{}, nil, errors.New("FFmpeg produjo una cabecera MP4 vacía")
+				}
+				return metadata, append([]byte(nil), frame.Data...), nil
+			case livestream.FrameError:
+				message := strings.TrimSpace(string(frame.Data))
+				if message == "" {
+					message = "FFmpeg no pudo crear la transmisión en vivo"
+				}
+				return livestream.Metadata{}, nil, errors.New(message)
+			}
+		}
+	}
 }
 
 func (s *Server) offer(w http.ResponseWriter, r *http.Request) {

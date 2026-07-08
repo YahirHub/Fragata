@@ -1,6 +1,6 @@
 # Fragata
 
-Fragata es un servidor de cámaras IP escrito en Go. Detecta dispositivos ONVIF, elige el stream RTSP de mayor resolución para grabarlo sin recomprimir, guarda video H.264/H.265 y audio compatible en segmentos MKV, ofrece vista en vivo mediante WebRTC, puede subir grabaciones terminadas por SFTP y registra los eventos ONVIF nativos emitidos por cada cámara.
+Fragata es un servidor de cámaras IP escrito en Go. Detecta dispositivos ONVIF, elige el stream RTSP de mayor resolución para grabarlo sin recomprimir, guarda video H.264/H.265 y audio compatible en segmentos MKV, ofrece vista en vivo mediante MP4 fragmentado autenticado sobre HTTP/HTTPS, puede subir grabaciones terminadas por SFTP y registra los eventos ONVIF nativos emitidos por cada cámara.
 
 El núcleo sigue siendo un único binario compilable con `CGO_ENABLED=0` y frontend embebido. Fragata no analiza snapshots ni ejecuta un detector local de movimiento o personas: crea una suscripción ONVIF PullPoint y conserva las alertas que la propia cámara genera. FFmpeg sigue siendo opcional para el binario nativo, pero habilita la normalización de video, la conversión de audio y la reproducción histórica compatible con navegadores. El archivo MKV conserva siempre el video y audio originales de la cámara.
 
@@ -29,7 +29,7 @@ Incluido:
 - Fallback a un substream H.264 cuando FFmpeg no está disponible o no puede iniciar.
 - Grabación MKV continua con duración configurable por cámara, rotación sin huecos y cierre atómico desde `.mkv.partial`.
 - Recuperación conservadora de parciales después de un apagado inesperado.
-- Vista en vivo WebRTC con reconexión automática, supervisor de reinicio del servidor, modo monitor para tablets, arranque desde el GOP actual y pantalla completa.
+- Vista en vivo fMP4/MSE por el mismo puerto autenticado de la aplicación, con reconexión automática, proceso compartido por cámara, modo monitor para tablets y pantalla completa.
 - Grabación apagada al agregar una cámara, switch persistente y componente reutilizable para elegir entre 1 minuto y 24 horas por archivo.
 - Audio en vivo y dentro del MKV para cámaras que entregan G.711 A-law, G.711 μ-law, Opus o AAC por RTSP.
 - Cola SFTP persistente, reintentos con backoff, `known_hosts`, archivo temporal remoto y checksum SHA-256.
@@ -170,7 +170,7 @@ El listado de cámaras usa un menú de tres puntos por fila para abrir el visor,
 
 El visor comienza silenciado porque los navegadores bloquean la reproducción automática con sonido. Cuando la cámara ofrece audio compatible, aparece el botón **Activar sonido**; la acción del usuario habilita la pista sin reiniciar el video.
 
-El supervisor del visor consulta `/healthz` de forma independiente. Si el proceso Go se detiene, mantiene la página abierta, muestra el estado desconectado y vuelve a cargar sesión, cámara y WebRTC cuando Fragata inicia otra vez. El botón **Monitor activo** conserva la preferencia y usa Screen Wake Lock cuando el navegador y el contexto seguro lo permiten, evitando que una tablet apague la pantalla mientras funciona como monitor.
+El supervisor del visor consulta `/healthz` de forma independiente. Si el proceso Go se detiene, mantiene la página abierta, muestra el estado desconectado y vuelve a cargar sesión, cámara y transmisión fMP4 cuando Fragata inicia otra vez. El botón **Monitor activo** conserva la preferencia y usa Screen Wake Lock cuando el navegador y el contexto seguro lo permiten, evitando que una tablet apague la pantalla mientras funciona como monitor.
 
 Al cambiar IP, usuario, contraseña o URL RTSP, Fragata prueba la nueva configuración antes de guardarla. Una contraseña vacía conserva la credencial cifrada actual. Cambiar la carpeta afecta únicamente a nuevas grabaciones y no mueve los archivos existentes.
 
@@ -292,13 +292,13 @@ Fragata guarda dos decisiones independientes por cámara:
 
 ```text
 Stream principal de mayor resolución -> grabación MKV sin recomprimir
-Stream de vista -> WebRTC directo, FFmpeg o substream H.264
+Stream de vista -> FFmpeg -> fMP4/MSE autenticado por HTTP/HTTPS
 ```
 
 La política de visualización es:
 
 1. Si el stream principal es H.264, se envía directamente al navegador.
-2. Si el principal es H.265 y Fragata detectó FFmpeg, toma ese stream de máxima resolución y lo recomprime a H.264 solo para WebRTC, conservando dimensiones y relación de aspecto.
+2. Si el principal es H.265, FFmpeg lo convierte una sola vez por cámara a H.264 para el navegador, conservando dimensiones y relación de aspecto. Los espectadores comparten el mismo proceso.
 3. Si FFmpeg no existe o falla, se utiliza el mejor substream H.264 detectado.
 4. Si no existe ninguna opción compatible, la grabación H.265 continúa funcionando y el panel explica por qué no puede abrir la vista.
 
@@ -408,7 +408,7 @@ Fragata detecta pistas de audio RTSP compatibles y las distribuye por el mismo h
 - Opus mono o estéreo.
 - AAC transportado como MPEG-4 Audio.
 
-El video y el audio originales se guardan sin recomprimir en el mismo MKV. Para la vista web, el video y el audio usan sesiones WebRTC independientes: una falla de audio nunca reinicia ni bloquea el video. G.711 y Opus se envían directamente; cuando la cámara usa AAC y FFmpeg está disponible, Fragata inicia una conversión auxiliar a PCMU únicamente después de que el usuario solicita sonido. La grabación conserva el AAC original.
+El video y el audio originales se guardan sin recomprimir en el mismo MKV. Para la vista web, FFmpeg crea un MP4 fragmentado independiente de la grabación: H.264 puede remultiplexarse, H.265 se convierte a H.264 y el audio disponible se normaliza a AAC. El navegador recibe ambos por la misma respuesta autenticada y el botón de sonido solo controla el audio local del elemento `<video>`.
 
 El visor inicia siempre con una sesión de video sin audio y permanece en `Conectando` hasta confirmar un fotograma decodificado. El audio se negocia solo al pulsar **Activar sonido**, respetando las políticas de reproducción automática del navegador y evitando conexiones RTSP adicionales mientras no se necesitan.
 
@@ -587,7 +587,8 @@ journalctl -u fragata -f
 | `PATCH/DELETE` | `/api/sftp-profiles/{id}` | Modificar o eliminar un perfil global |
 | `POST` | `/api/sftp-profiles/{id}/test` | Probar conexión y directorio remoto |
 | `GET/PATCH` | `/api/retention` | Consultar o cambiar la política global de retención |
-| `POST` | `/api/cameras/{id}/offer` | Negociar una sesión WebRTC explícita de `video` o `audio` |
+| `GET` | `/api/cameras/{id}/live-stream` | Transmitir fMP4 autenticado al visor mediante el mismo puerto HTTP/HTTPS |
+| `POST` | `/api/cameras/{id}/offer` | Compatibilidad heredada para negociación WebRTC |
 
 Las operaciones mutables requieren el encabezado `X-Fragata-CSRF` cuando el login está habilitado.
 
@@ -605,10 +606,11 @@ Antes de publicar el panel, complete la lista de [`SECURITY.md`](SECURITY.md).
 - No publiques el puerto de Fragata directamente en Internet sin HTTPS, firewall y una contraseña robusta.
 - El audio PCMA, PCMU y Opus se reproduce directamente; AAC se conserva en MKV y puede convertirse de forma opcional para el navegador mediante FFmpeg sin afectar el video.
 - Los clusters MKV se descargan al archivo aproximadamente cada 5 segundos para limitar memoria y pérdida ante cortes.
-- `FRAGATA_MAX_VIEWERS` limita espectadores; internamente se reservan hasta dos sesiones WebRTC por visor, una de video y otra opcional de audio.
+- `FRAGATA_MAX_VIEWERS` limita navegadores conectados al video en vivo.
+- `FRAGATA_MAX_LIVE_STREAMS` limita cuántas cámaras distintas mantienen FFmpeg activo; todos los espectadores de una cámara comparten el mismo proceso.
 - `FRAGATA_MAX_TRANSCODES` limita procesos FFmpeg de reproducción histórica y devuelve `429` cuando el servidor está ocupado.
 - Los identificadores de grabación codifican rutas relativas; el servidor valida contención, extensión, estructura y rechaza enlaces simbólicos antes de abrir un archivo.
-- `FRAGATA_LIVE_IDLE_TIMEOUT` apaga FFmpeg o el substream de vista cuando ya no existen espectadores.
+- `FRAGATA_LIVE_IDLE_TIMEOUT` apaga el proceso fMP4 compartido cuando ya no existen espectadores.
 - El escritor H.265 debe validarse con los modelos reales que se usarán antes de considerarlo producción estable.
 - Los endpoints ONVIF de eventos se normalizan hacia el host configurado para impedir que una respuesta de la cámara desvíe solicitudes a otro equipo.
 - Las respuestas SOAP se procesan con límites HTTP y timeouts; la suscripción se cancela al detener el worker.
@@ -654,7 +656,7 @@ cmd/fragata/          punto de entrada
 internal/auth/        sesiones persistentes, login y CSRF
 internal/camera/      descubrimiento, configuración y supervisión de cámaras
 internal/httpapi/     API y panel web embebido
-internal/live/        access units H.264 normalizadas hacia WebRTC
+internal/live/        compatibilidad WebRTC heredada
 internal/matroska/    escritor MKV sin CGO
 internal/onvif/       WS-Discovery, SOAP y suscripciones PullPoint de eventos
 internal/recording/   segmentación, audio y recuperación
@@ -663,8 +665,21 @@ internal/logging/     logs.txt rotativo con límite estricto
 internal/retention/   limpieza segura por antigüedad
 internal/store/       estado JSON atómico y secretos cifrados
 internal/stream/      distribución interna de RTP y access units
-internal/transcode/   FFmpeg opcional y reconstrucción RTP/H.264 para WebRTC
+internal/livestream/  fMP4 compartido por cámara para MSE/HTTP
+internal/transcode/   conversión H.264/AAC y reproducción histórica
 internal/upload/      cola y transferencia SFTP
 contexto/             decisiones técnicas persistentes
 ```
 
+
+
+### Vista en vivo en VPS sin puertos adicionales
+
+El visor principal ya no depende de que el navegador alcance candidatos ICE internos de Docker. La ruta protegida `GET /api/cameras/{id}/live-stream` toma el RTSP de la cámara mediante FFmpeg, genera MP4 fragmentado y lo entrega por la misma conexión HTTP/HTTPS de Fragata. JavaScript usa Media Source Extensions para añadir la cabecera y los fragmentos al elemento `<video>`.
+
+- H.264 se remultiplexa sin recomprimir cuando es compatible.
+- H.265 se convierte a H.264 con preset ultrarrápido y baja latencia.
+- El audio se normaliza a AAC.
+- Una cámara usa un solo proceso FFmpeg compartido entre sus espectadores.
+- La cookie de sesión protege la ruta; una URL copiada sin sesión válida responde `401`.
+- No hace falta publicar 8554, 8555 ni rangos UDP. El proxy inverso debe permitir respuestas HTTP en streaming y no almacenarlas en búfer. Fragata envía `X-Accel-Buffering: no`.
